@@ -561,10 +561,10 @@ class _WalletDetailScreenState extends State<WalletDetailScreen> with TickerProv
                 children: [
                   Expanded(
                     child: _UtxoAction(
-                      iconPath: CommonMenuIconPath.grid,
+                      iconPath: FeatureArkIconPath.boat,
                       label: t.ark.wallet.overview,
                       description: t.ark.wallet.overview_description,
-                      iconPadding: const EdgeInsets.all(2),
+                      iconPadding: EdgeInsets.zero,
                       onTap:
                           () => Navigator.pushNamed(
                             context,

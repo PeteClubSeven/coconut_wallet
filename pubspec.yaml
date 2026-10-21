@@ -150,6 +150,7 @@ flutter:
     - assets/svg/common/security/
     - assets/svg/common/state/
     - assets/svg/common/visibility/
+    - assets/svg/features/ark/
     - assets/svg/features/connectivity/
     - assets/svg/features/settings/
     - assets/svg/features/tags/

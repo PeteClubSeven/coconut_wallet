@@ -160,6 +160,10 @@ abstract final class FeatureTransactionIconPath {
   static const String txSent = 'assets/svg/features/transaction/tx-sent.svg';
 }
 
+abstract final class FeatureArkIconPath {
+  static const String boat = 'assets/svg/features/ark/boat.svg';
+}
+
 abstract final class FeatureUtxoIconPath {
   static const String dust = 'assets/svg/features/utxo/dust.svg';
   static const String faucet = 'assets/svg/features/utxo/faucet.svg';
