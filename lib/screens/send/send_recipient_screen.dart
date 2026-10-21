@@ -397,15 +397,23 @@ class _SendRecipientScreenState extends State<SendRecipientScreen> {
         children: [
           Text(_walletName, style: CoconutTypography.body1_16.setColor(colors.primaryText)),
           CoconutLayout.spacing_50h,
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 2.5),
-            decoration: BoxDecoration(color: colors.surfaceButton, borderRadius: BorderRadius.circular(4)),
-            child: Text(
-              t.ark.send.available_pill(
-                onchain: _unit.displayBitcoinAmount(_onchainAvailableSats, withUnit: true),
-                ark: _unit.displayBitcoinAmount(arkAvailable, withUnit: true),
+          // Both balances must stay readable, so the pill shrinks rather than cut them off.
+          FittedBox(
+            fit: BoxFit.scaleDown,
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 2.5),
+              decoration: BoxDecoration(color: colors.surfaceButton, borderRadius: BorderRadius.circular(4)),
+              child: Text(
+                // The unit once at the end, unless it's a prefix symbol (BIP-177).
+                t.ark.send
+                    .available_pill(
+                      onchain: _unit.displayBitcoinAmount(_onchainAvailableSats, withUnit: _unit.isPrefixSymbol),
+                      ark: _unit.displayBitcoinAmount(arkAvailable, withUnit: _unit.isPrefixSymbol),
+                      unit: _unit.isPrefixSymbol ? '' : _unit.symbol,
+                    )
+                    .trim(),
+                style: CoconutTypography.body3_12_Number.setColor(colors.surfaceButtonText),
               ),
-              style: CoconutTypography.body3_12_Number.setColor(colors.surfaceButtonText),
             ),
           ),
         ],

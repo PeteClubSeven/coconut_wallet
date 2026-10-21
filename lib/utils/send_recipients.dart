@@ -127,5 +127,6 @@ class SendRecipientList {
   /// The filled rows, in order.
   List<SendRecipientCheck> get recipients => checks.where((check) => !check.isEmpty).toList();
 
-  bool get canContinue => !exceedsAvailable && recipients.isNotEmpty && recipients.every((check) => check.isValid);
+  /// As the send screen: every page needs a recipient, so an added page left empty holds Next back.
+  bool get canContinue => !exceedsAvailable && checks.isNotEmpty && checks.every((check) => check.isValid);
 }

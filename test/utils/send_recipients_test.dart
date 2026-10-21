@@ -68,7 +68,7 @@ void main() {
     expect(list.canContinue, isFalse);
   });
 
-  test('duplicates are refused, empty rows ignored, and Max only on the last', () {
+  test('duplicates are refused, empty rows block Next, and Max only on the last', () {
     final list = check([
       const SendRecipientRow(_bitcoin, enteredAmountSats: 10000),
       const SendRecipientRow(''),
@@ -79,6 +79,10 @@ void main() {
     expect(list.checks[2].problem, SendRecipientProblem.duplicate);
     expect(list.checks[3].canUseMax, isTrue);
     expect(list.recipients.length, 3);
+
+    final withEmpty = check([const SendRecipientRow(_bitcoin, enteredAmountSats: 10000), const SendRecipientRow('')]);
+    expect(withEmpty.recipients.length, 1);
+    expect(withEmpty.canContinue, isFalse);
 
     final maxNotLast = check([
       const SendRecipientRow(_bitcoin, isMax: true),

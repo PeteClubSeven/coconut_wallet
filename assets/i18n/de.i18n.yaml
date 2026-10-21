@@ -1978,7 +1978,7 @@ ark:
     estimate_failed: "Could not estimate the fee: $error"
   send:
     recipient_n: "Recipient $n"
-    available_pill: "On-chain $onchain · Ark $ark"
+    available_pill: "On-chain $onchain · Ark $ark $unit"
     destination_placeholder: "Address, Lightning invoice or payment code"
     bitcoin_address_placeholder: "Bitcoin address"
     amount_placeholder: "Amount"
