@@ -105,7 +105,15 @@ class ArkChip extends StatelessWidget {
 
 /// A small label over an amount in a rounded box, as the UTXO overview's availability chips.
 class ArkBalanceBox extends StatelessWidget {
-  const ArkBalanceBox({super.key, required this.label, required this.amount, this.backgroundColor});
+  const ArkBalanceBox({
+    super.key,
+    required this.label,
+    required this.amount,
+    this.backgroundColor,
+    this.onPressed,
+    this.isEnabled = true,
+    this.isSelected = false,
+  });
 
   final String label;
   final String amount;
@@ -113,12 +121,20 @@ class ArkBalanceBox extends StatelessWidget {
   /// Defaults to the surface colour.
   final Color? backgroundColor;
 
+  /// Makes the box a button (Send's balance boxes fill the amount with the balance).
+  final VoidCallback? onPressed;
+
+  /// A dimmed box that does nothing when tapped (that balance can't pay).
+  final bool isEnabled;
+
+  /// Outlined while its balance is what's being sent.
+  final bool isSelected;
+
   @override
   Widget build(BuildContext context) {
     final colors = context.coconutColors;
-    return Container(
+    final content = Padding(
       padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(color: backgroundColor ?? colors.surface, borderRadius: BorderRadius.circular(12)),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -128,6 +144,30 @@ class ArkBalanceBox extends StatelessWidget {
         ],
       ),
     );
+    final border = Border.all(color: isSelected ? colors.borderStrong : Colors.transparent);
+    final Widget box =
+        onPressed == null
+            ? Container(
+              decoration: BoxDecoration(
+                color: backgroundColor ?? colors.surface,
+                borderRadius: BorderRadius.circular(12),
+                border: border,
+              ),
+              child: content,
+            )
+            : ShrinkAnimationButton(
+              onPressed: isEnabled ? onPressed! : () {},
+              defaultColor: backgroundColor ?? colors.surface,
+              pressedOverlayColor: colors.surfacePressOverlay,
+              pressedOverlayOpacity: colors.surfacePressOverlayOpacity,
+              borderRadius: 12,
+              borderWidth: 0,
+              child: Container(
+                decoration: BoxDecoration(borderRadius: BorderRadius.circular(12), border: border),
+                child: content,
+              ),
+            );
+    return AnimatedOpacity(opacity: isEnabled ? 1 : 0.35, duration: const Duration(milliseconds: 150), child: box);
   }
 }
 
@@ -198,43 +238,51 @@ class ArkSelectableCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final colors = context.coconutColors;
+    // The footer sits outside the button: it can hold its own controls (the on-chain card's fee
+    // rate field), which the button's tap handling would otherwise swallow.
     return Opacity(
       opacity: isEnabled ? 1 : 0.5,
-      child: ShrinkAnimationButton(
-        onPressed: onPressed,
-        defaultColor: colors.surface,
-        pressedOverlayColor: colors.surfacePressOverlay,
-        pressedOverlayOpacity: colors.surfacePressOverlayOpacity,
-        borderRadius: CoconutStyles.radius_300,
-        borderWidth: isSelected ? 1 : 0,
-        border: isSelected ? Border.all(color: colors.borderStrong) : null,
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Row(
-                children: [
-                  Expanded(child: child),
-                  Container(
-                    margin: const EdgeInsets.only(left: 16),
-                    width: 18,
-                    height: 18,
-                    child:
-                        isSelected
-                            ? SvgPicture.asset(
-                              CommonActionIconPath.check,
-                              width: 16,
-                              height: 16,
-                              colorFilter: ColorFilter.mode(colors.primaryText, BlendMode.srcIn),
-                            )
-                            : null,
-                  ),
-                ],
+      child: Container(
+        decoration: BoxDecoration(
+          color: colors.surface,
+          borderRadius: BorderRadius.circular(CoconutStyles.radius_300),
+          border: Border.all(color: isSelected ? colors.borderStrong : Colors.transparent),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            ShrinkAnimationButton(
+              onPressed: onPressed,
+              defaultColor: colors.surface,
+              pressedOverlayColor: colors.surfacePressOverlay,
+              pressedOverlayOpacity: colors.surfacePressOverlayOpacity,
+              borderRadius: CoconutStyles.radius_300,
+              borderWidth: 0,
+              child: Padding(
+                padding: EdgeInsets.fromLTRB(20, 16, 20, footer == null ? 16 : 0),
+                child: Row(
+                  children: [
+                    Expanded(child: child),
+                    Container(
+                      margin: const EdgeInsets.only(left: 16),
+                      width: 18,
+                      height: 18,
+                      child:
+                          isSelected
+                              ? SvgPicture.asset(
+                                CommonActionIconPath.check,
+                                width: 16,
+                                height: 16,
+                                colorFilter: ColorFilter.mode(colors.primaryText, BlendMode.srcIn),
+                              )
+                              : null,
+                    ),
+                  ],
+                ),
               ),
-              if (footer != null) footer!,
-            ],
-          ),
+            ),
+            if (footer != null) Padding(padding: const EdgeInsets.fromLTRB(20, 0, 20, 16), child: footer!),
+          ],
         ),
       ),
     );

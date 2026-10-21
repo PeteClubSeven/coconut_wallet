@@ -1,112 +1,29 @@
 import 'package:coconut_design_system/coconut_design_system.dart';
-import 'package:coconut_lib/coconut_lib.dart';
+import 'package:coconut_wallet/constants/icon_path.dart';
 import 'package:coconut_wallet/design_system/context/coconut_theme_context_extension.dart';
 import 'package:coconut_wallet/enums/fiat_enums.dart';
 import 'package:coconut_wallet/localization/strings.g.dart';
-import 'package:coconut_wallet/model/wallet/wallet_item_base.dart';
+import 'package:coconut_wallet/model/ark/move.dart';
+import 'package:coconut_wallet/providers/wallet_provider.dart';
+import 'package:coconut_wallet/screens/home/wallet_add/wallet_add_dialog.dart';
+import 'package:coconut_wallet/utils/dashed_border_painter.dart';
 import 'package:coconut_wallet/widgets/common/buttons/fixed_bottom_button.dart';
-import 'package:coconut_wallet/widgets/common/overlays/common_bottom_sheets.dart';
+import 'package:coconut_wallet/widgets/common/buttons/shrink_animation_button.dart';
 import 'package:coconut_wallet/widgets/features/ark/ark_texts.dart';
+import 'package:coconut_wallet/widgets/features/wallet/icon/wallet_icon_small.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_svg/flutter_svg.dart';
+import 'package:provider/provider.dart';
 
-enum MoveEndpointKind { onchain, ark, vault }
-
-/// One place funds can move from or to: this hot wallet's on-chain balance, its Ark balance, or
-/// a vault (a watch-only wallet signed with Coconut Vault).
-class MoveEndpoint {
-  const MoveEndpoint({required this.kind, required this.walletId, required this.walletName, required this.balanceSats});
-
-  final MoveEndpointKind kind;
-  final int walletId;
-  final String walletName;
-  final int balanceSats;
-
-  @override
-  bool operator ==(Object other) => other is MoveEndpoint && other.kind == kind && other.walletId == walletId;
-
-  @override
-  int get hashCode => Object.hash(kind, walletId);
-}
-
-class MoveSelection {
-  const MoveSelection(this.from, this.to);
-
-  final MoveEndpoint from;
-  final MoveEndpoint to;
-}
-
-/// The places [hotWallet] can move funds between. One end of a move is always the hot wallet
-/// (its on-chain or Ark side): vault-to-vault moves stay in the vault's own Send.
-class MoveOptions {
-  MoveOptions({
-    required WalletItemBase hotWallet,
-    required int onchainBalanceSats,
-    required int? arkBalanceSats,
-    required List<({WalletItemBase wallet, int balanceSats})> vaults,
-  }) : onchain = MoveEndpoint(
-         kind: MoveEndpointKind.onchain,
-         walletId: hotWallet.id,
-         walletName: hotWallet.name,
-         balanceSats: onchainBalanceSats,
-       ),
-       ark =
-           arkBalanceSats == null
-               ? null
-               : MoveEndpoint(
-                 kind: MoveEndpointKind.ark,
-                 walletId: hotWallet.id,
-                 walletName: hotWallet.name,
-                 balanceSats: arkBalanceSats,
-               ),
-       vaults = [
-         for (final vault in vaults)
-           MoveEndpoint(
-             kind: MoveEndpointKind.vault,
-             walletId: vault.wallet.id,
-             walletName: vault.wallet.name,
-             balanceSats: vault.balanceSats,
-           ),
-       ],
-       _boardableVaultIds = {
-         for (final vault in vaults)
-           if (_hasNativeSegwitInputs(vault.wallet)) vault.wallet.id,
-       };
-
-  final MoveEndpoint onchain;
-  final MoveEndpoint? ark;
-  final List<MoveEndpoint> vaults;
-  final Set<int> _boardableVaultIds;
-
-  List<MoveEndpoint> get all => [onchain, if (ark != null) ark!, ...vaults];
-
-  /// Whether there is anywhere to move between at all.
-  bool get hasChoices => ark != null || vaults.isNotEmpty;
-
-  /// Where funds from [from] can go.
-  List<MoveEndpoint> destinationsFor(MoveEndpoint from) => switch (from.kind) {
-    MoveEndpointKind.onchain => [if (ark != null) ark!, ...vaults],
-    MoveEndpointKind.ark => [onchain, ...vaults],
-    MoveEndpointKind.vault => [
-      onchain,
-      // bark only boards from native segwit inputs: a nested-segwit input's txid changes once signed.
-      if (ark != null && _boardableVaultIds.contains(from.walletId)) ark!,
-    ],
-  };
-
-  bool canMoveFrom(MoveEndpoint from) => from.balanceSats > 0 && destinationsFor(from).isNotEmpty;
-
-  static bool _hasNativeSegwitInputs(WalletItemBase wallet) {
-    final name = wallet.walletBase.addressType.name;
-    return name == AddressType.p2wpkh.name || name == AddressType.p2wsh.name || name == AddressType.p2tr.name;
-  }
-}
-
-/// Picks where to move funds from and to. Pops with a [MoveSelection].
+/// Picks where to move funds, in two steps in the style of the vault sheet: first where from,
+/// then where to, each a list of wallet cards with a radio mark. Without a vault, step two offers
+/// to create one. Pops with a [MoveSelection].
 class MoveSheet extends StatefulWidget {
-  const MoveSheet({super.key, required this.options, required this.currentUnit});
+  const MoveSheet({super.key, required this.options, required this.currentUnit, this.scrollController});
 
   final MoveOptions options;
   final BitcoinUnit currentUnit;
+  final ScrollController? scrollController;
 
   @override
   State<MoveSheet> createState() => _MoveSheetState();
@@ -115,95 +32,237 @@ class MoveSheet extends StatefulWidget {
 class _MoveSheetState extends State<MoveSheet> {
   MoveEndpoint? _from;
   MoveEndpoint? _to;
+  bool _isPickingDestination = false;
 
   @override
   void initState() {
     super.initState();
     final options = widget.options;
     _from = options.all.where(options.canMoveFrom).firstOrNull;
-    _to = _from == null ? null : options.destinationsFor(_from!).firstOrNull;
   }
 
-  void _selectFrom(MoveEndpoint from) {
-    setState(() {
-      _from = from;
+  void _next() {
+    final from = _from;
+    if (from == null) return;
+    if (!_isPickingDestination) {
       final destinations = widget.options.destinationsFor(from);
-      if (!destinations.contains(_to)) _to = destinations.firstOrNull;
-    });
+      setState(() {
+        _isPickingDestination = true;
+        if (!destinations.contains(_to)) _to = destinations.firstOrNull;
+      });
+      return;
+    }
+    if (_to != null) Navigator.pop(context, MoveSelection(from, _to!));
+  }
+
+  /// Closes the sheet and opens the watch-only wallet sources, as the vault sheet does.
+  Future<void> _createVault() async {
+    final navigator = Navigator.of(context);
+    final sheetRoute = ModalRoute.of(context);
+    navigator.pop();
+    await sheetRoute?.completed;
+    if (!navigator.mounted) return;
+    WalletAddDialog.showBottomSheet(navigator.context, WalletAddDialogMode.watchOnlySource);
   }
 
   @override
   Widget build(BuildContext context) {
+    final colors = context.coconutColors;
     final options = widget.options;
     final from = _from;
-    final destinations = from == null ? const <MoveEndpoint>[] : options.destinationsFor(from);
+    final List<Widget> cards;
+    if (_isPickingDestination && from != null) {
+      cards = [
+        for (final endpoint in options.destinationsFor(from))
+          _endpointCard(
+            endpoint,
+            selected: endpoint == _to,
+            enabled: true,
+            onTap: () => setState(() => _to = endpoint),
+          ),
+        if (options.vaults.isEmpty) _buildCreateVault(),
+      ];
+    } else {
+      cards = [
+        for (final endpoint in options.all)
+          _endpointCard(
+            endpoint,
+            selected: endpoint == from,
+            enabled: options.canMoveFrom(endpoint),
+            onTap: () => setState(() => _from = endpoint),
+          ),
+      ];
+    }
     return SafeArea(
       top: false,
-      child: SingleChildScrollView(
-        padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            _sectionTitle(t.ark.move.from),
-            for (final endpoint in options.all)
-              _option(
-                endpoint,
-                selected: endpoint == from,
-                enabled: options.canMoveFrom(endpoint),
-                onTap: () => _selectFrom(endpoint),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          _buildHeader(),
+          Flexible(
+            child: SingleChildScrollView(
+              controller: widget.scrollController,
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              child: Column(
+                children: [for (final card in cards) Padding(padding: const EdgeInsets.only(bottom: 12), child: card)],
               ),
-            CoconutLayout.spacing_400h,
-            _sectionTitle(t.ark.move.to),
-            for (final endpoint in options.all)
-              if (endpoint != from)
-                _option(
-                  endpoint,
-                  selected: endpoint == _to,
-                  enabled: destinations.contains(endpoint),
-                  onTap: () => setState(() => _to = endpoint),
-                ),
-            CoconutLayout.spacing_500h,
-            InlineActionButton(
-              text: t.next,
-              isActive: from != null && _to != null,
-              onPressed: () {
-                if (from == null || _to == null) return;
-                Navigator.pop(context, MoveSelection(from, _to!));
-              },
             ),
-          ],
+          ),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
+            child: InlineActionButton(
+              text: t.next,
+              isActive: from != null && (!_isPickingDestination || _to != null),
+              backgroundColor: colors.primary,
+              onPressed: _next,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// The vault sheet's header: the step's title, with close (or back, on step two) on the left.
+  Widget _buildHeader() {
+    final colors = context.coconutColors;
+    return Padding(
+      padding: const EdgeInsets.all(20),
+      child: Stack(
+        alignment: Alignment.center,
+        children: [
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 40),
+            child: Text(
+              _isPickingDestination ? t.ark.move.to_title : t.ark.move.from_title,
+              style: CoconutTypography.body2_14_Bold.setColor(colors.primaryText),
+            ),
+          ),
+          Align(
+            alignment: Alignment.centerLeft,
+            child: GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              onTap: () {
+                if (_isPickingDestination) {
+                  setState(() => _isPickingDestination = false);
+                } else {
+                  Navigator.pop(context);
+                }
+              },
+              child:
+                  _isPickingDestination
+                      ? SvgPicture.asset(
+                        CommonNavigationIconPath.arrowBack,
+                        width: 24,
+                        colorFilter: ColorFilter.mode(colors.iconPrimary, BlendMode.srcIn),
+                      )
+                      : Icon(Icons.close_rounded, size: 24, color: colors.iconPrimary),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// A wallet card as the vault sheet lists them (icon, balance, name), with a radio mark where
+  /// that sheet has an arrow. The Ark side wears the boat as its badge.
+  Widget _endpointCard(
+    MoveEndpoint endpoint, {
+    required bool selected,
+    required bool enabled,
+    required VoidCallback onTap,
+  }) {
+    final colors = context.coconutColors;
+    final wallet = context.read<WalletProvider>().getWalletById(endpoint.walletId);
+    return AnimatedOpacity(
+      opacity: enabled ? 1 : 0.4,
+      duration: const Duration(milliseconds: 150),
+      child: ShrinkAnimationButton(
+        onPressed: enabled ? onTap : () {},
+        defaultColor: colors.homeSurface,
+        pressedOverlayColor: colors.homeSurfacePressOverlay,
+        pressedOverlayOpacity: colors.homeSurfacePressOverlayOpacity,
+        borderRadius: 12,
+        borderWidth: 0,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 18),
+          child: Row(
+            children: [
+              WalletIconSmall(
+                walletImportSource: wallet.walletImportSource,
+                iconIndex: wallet.iconIndex,
+                colorIndex: wallet.colorIndex,
+                isHotWallet: wallet.hasLocalKey,
+                badgeSvgAssetPath: endpoint.kind == MoveEndpointKind.ark ? FeatureArkIconPath.boat : null,
+                badgeBorderColor: colors.homeSurface,
+              ),
+              CoconutLayout.spacing_200w,
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    FittedBox(
+                      fit: BoxFit.scaleDown,
+                      alignment: Alignment.centerLeft,
+                      child: Text(
+                        widget.currentUnit.displayBitcoinAmount(endpoint.balanceSats, withUnit: true),
+                        style: CoconutTypography.body2_14_NumberBold.setColor(colors.primaryText),
+                      ),
+                    ),
+                    Text(moveEndpointText(endpoint), style: CoconutTypography.body3_12.setColor(colors.secondaryText)),
+                  ],
+                ),
+              ),
+              CoconutLayout.spacing_200w,
+              SvgPicture.asset(
+                selected ? CommonFormIconPath.circleCheck : CommonFormIconPath.circle,
+                width: 20,
+                height: 20,
+                colorFilter: ColorFilter.mode(selected ? colors.primaryText : colors.iconSecondary, BlendMode.srcIn),
+              ),
+            ],
+          ),
         ),
       ),
     );
   }
 
-  Widget _sectionTitle(String text) => Padding(
-    padding: const EdgeInsets.only(left: 4, bottom: 4),
-    child: Text(text, style: CoconutTypography.body2_14_Bold.setColor(context.coconutColors.primaryText)),
-  );
-
-  /// A row of Coconut's selectable sheets: the place and its balance, with a check when picked.
-  Widget _option(MoveEndpoint endpoint, {required bool selected, required bool enabled, required VoidCallback onTap}) {
+  /// No vault yet: the dashed "add a wallet" card, opening the watch-only wallet sources.
+  Widget _buildCreateVault() {
     final colors = context.coconutColors;
-    return SelectableBottomSheetTextItem(
-      isSelected: selected,
-      isDisabled: !enabled,
-      reserveCheckIconSpace: true,
-      onTap: onTap,
-      child: Row(
-        children: [
-          Expanded(
-            child: Text(
-              moveEndpointText(endpoint),
-              style: CoconutTypography.body2_14_Bold.setColor(colors.primaryText),
-            ),
+    return ShrinkAnimationButton(
+      onPressed: _createVault,
+      defaultColor: colors.homeSurface,
+      pressedOverlayColor: colors.homeSurfacePressOverlay,
+      pressedOverlayOpacity: colors.homeSurfacePressOverlayOpacity,
+      borderRadius: 12,
+      borderWidth: 0,
+      child: CustomPaint(
+        painter: DashedBorderPainter(dashSpace: 4.0, dashWidth: 4.0, color: colors.border),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 18),
+          child: Row(
+            children: [
+              SvgPicture.asset(
+                FeatureWalletIconPath.walletEyes,
+                width: 30,
+                colorFilter: ColorFilter.mode(colors.iconSecondary, BlendMode.srcIn),
+              ),
+              CoconutLayout.spacing_200w,
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(t.ark.move.create_vault, style: CoconutTypography.body2_14_Bold.setColor(colors.primaryText)),
+                    Text(
+                      t.ark.move.create_vault_description,
+                      style: CoconutTypography.body3_12.setColor(colors.secondaryText),
+                    ),
+                  ],
+                ),
+              ),
+            ],
           ),
-          Text(
-            widget.currentUnit.displayBitcoinAmount(endpoint.balanceSats, withUnit: true),
-            style: CoconutTypography.body3_12_Number.setColor(colors.secondaryText),
-          ),
-        ],
+        ),
       ),
     );
   }

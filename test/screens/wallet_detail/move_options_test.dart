@@ -1,6 +1,6 @@
 import 'package:coconut_lib/coconut_lib.dart';
 import 'package:coconut_wallet/model/wallet/singlesig_wallet_item.dart';
-import 'package:coconut_wallet/screens/wallet_detail/move_sheet.dart';
+import 'package:coconut_wallet/model/ark/move.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 const _descriptor =

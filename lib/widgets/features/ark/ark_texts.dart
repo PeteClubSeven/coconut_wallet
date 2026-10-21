@@ -2,7 +2,7 @@ import 'package:coconut_wallet/enums/fiat_enums.dart';
 import 'package:coconut_wallet/localization/strings.g.dart';
 import 'package:coconut_wallet/model/wallet/wallet_activity.dart';
 import 'package:coconut_wallet/providers/view_model/send/send_options_view_model.dart';
-import 'package:coconut_wallet/screens/wallet_detail/move_sheet.dart';
+import 'package:coconut_wallet/model/ark/move.dart';
 import 'package:coconut_wallet/utils/payment_request_parser.dart';
 import 'package:coconut_wallet/utils/send_recipients.dart';
 
@@ -110,6 +110,7 @@ String? sendOptionProblemText(SendOptionStatus status) {
     SendOptionProblem.notEnoughOnchain => texts.not_enough_onchain,
     SendOptionProblem.tooSmallForFee => texts.too_small_for_fee,
     SendOptionProblem.buildFailed => status.detail ?? texts.build_failed,
+    SendOptionProblem.boardRefused => status.detail ?? texts.board_refused,
   };
 }
 

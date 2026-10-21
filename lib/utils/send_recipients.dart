@@ -7,26 +7,42 @@ enum SendRecipientProblem {
   /// The destination can't be paid at all; the request's own problem says why.
   unsupported,
 
-  /// One of several recipients without an on-chain address (Ark pays one destination).
+  /// One of several recipients without an on-chain address (Ark pays one destination), or a
+  /// destination the only balance that may pay can't reach (a move from on-chain).
   onchainOnly,
   duplicate,
   needsAmount,
 }
 
+/// Which balance a recipient's "everything" comes from: tapping a balance box on Send's first page
+/// fills the amount with that balance.
+enum SendMaxSource { onchain, ark }
+
+/// Which balances may pay: either (a send), or only one (a move from that balance).
+enum SendFunding { any, onchain, ark }
+
 /// One row of Send's first page, as entered.
 class SendRecipientRow {
-  const SendRecipientRow(this.input, {this.enteredAmountSats, this.isMax = false});
+  const SendRecipientRow(this.input, {this.enteredAmountSats, this.maxSource});
 
   final String input;
   final int? enteredAmountSats;
 
-  /// Send everything left (on-chain) to this row; only honoured on the last row.
-  final bool isMax;
+  /// Send everything left in this balance to this row; honoured only where the rules allow it.
+  final SendMaxSource? maxSource;
 }
 
 /// What Send's first page found in one row.
 class SendRecipientCheck {
-  const SendRecipientCheck({this.request, this.fixedAmountSats, this.amountSats, this.problem, this.canUseMax = false});
+  const SendRecipientCheck({
+    this.request,
+    this.fixedAmountSats,
+    this.amountSats,
+    this.problem,
+    this.canUseOnchainMax = false,
+    this.canUseArkMax = false,
+    this.maxSource,
+  });
 
   /// Null for an empty row.
   final PaymentRequest? request;
@@ -34,27 +50,37 @@ class SendRecipientCheck {
   /// The amount the destination carries (an invoice's, or a BIP21/BIP321 `amount`).
   final int? fixedAmountSats;
 
-  /// The amount to send: the fixed one, else the one entered; null with Max.
+  /// The amount to send: the fixed one, else the one entered; null when it's "everything".
   final int? amountSats;
 
   /// Why the row can't be sent yet.
   final SendRecipientProblem? problem;
 
-  /// Whether this row may send everything left (the last row, on-chain, with no fixed amount).
-  final bool canUseMax;
+  /// Whether the row may take everything left on-chain: the last row, with a Bitcoin address and
+  /// no fixed amount.
+  final bool canUseOnchainMax;
+
+  /// Whether the row may take everything in Ark: the only row, with a Bitcoin or Ark address and no
+  /// fixed amount.
+  final bool canUseArkMax;
+
+  /// The balance this row takes everything from, when it does.
+  final SendMaxSource? maxSource;
 
   bool get isEmpty => request == null;
   bool get isValid => !isEmpty && problem == null;
 }
 
 /// The rules for Send's first page: one recipient can be anything payable; several are paid in
-/// one on-chain transaction, so each needs an on-chain address (Ark pays one destination).
+/// one on-chain transaction, so each needs an on-chain address (Ark pays one destination). A move
+/// ([funding] other than [SendFunding.any]) pays only from its source balance.
 class SendRecipientList {
   SendRecipientList(
     List<SendRecipientRow> rows, {
     required NetworkType network,
     required int onchainAvailableSats,
     required int arkAvailableSats,
+    this.funding = SendFunding.any,
   }) {
     final requests = [
       for (final row in rows) row.input.trim().isEmpty ? null : PaymentRequest.parse(row.input.trim(), network),
@@ -76,17 +102,24 @@ class SendRecipientList {
       final row = rows[i];
       final fixed = request.amountSats;
       final address = request.bitcoinAddress == null ? null : normalizeAddress(request.bitcoinAddress!);
-      final canUseMax = i == lastFilled && address != null && fixed == null && request.isPayable;
-      final isMax = row.isMax && canUseMax;
-      final amount = isMax ? null : (fixed ?? row.enteredAmountSats);
+      final open = fixed == null && request.isPayable;
+      final canUseOnchainMax = funding != SendFunding.ark && i == lastFilled && address != null && open;
+      final canUseArkMax =
+          funding != SendFunding.onchain && !several && open && (address != null || request.arkAddress != null);
+      final maxSource = switch (row.maxSource) {
+        SendMaxSource.onchain when canUseOnchainMax => SendMaxSource.onchain,
+        SendMaxSource.ark when canUseArkMax => SendMaxSource.ark,
+        _ => null,
+      };
+      final amount = maxSource != null ? null : (fixed ?? row.enteredAmountSats);
       SendRecipientProblem? problem;
       if (!request.isPayable) {
         problem = SendRecipientProblem.unsupported;
-      } else if (several && address == null) {
+      } else if ((several || funding == SendFunding.onchain) && address == null) {
         problem = SendRecipientProblem.onchainOnly;
       } else if (several && !seen.add(address!)) {
         problem = SendRecipientProblem.duplicate;
-      } else if (!isMax && (amount == null || amount <= 0)) {
+      } else if (maxSource == null && (amount == null || amount <= 0)) {
         problem = SendRecipientProblem.needsAmount;
       }
       checks.add(
@@ -95,16 +128,23 @@ class SendRecipientList {
           fixedAmountSats: fixed,
           amountSats: amount,
           problem: problem,
-          canUseMax: canUseMax,
+          canUseOnchainMax: canUseOnchainMax,
+          canUseArkMax: canUseArkMax,
+          maxSource: maxSource,
         ),
       );
-      if (isMax) maxLast = true;
+      if (maxSource == SendMaxSource.onchain) maxLast = true;
+      if (maxSource == SendMaxSource.ark) maxFromArk = true;
     }
 
     final first = filled.isEmpty ? null : checks[filled.first].request;
     final total = checks.fold<int>(0, (sum, check) => sum + (check.amountSats ?? 0));
     final int available;
-    if (several || first == null) {
+    if (funding == SendFunding.onchain || several) {
+      available = onchainAvailableSats;
+    } else if (funding == SendFunding.ark) {
+      available = arkAvailableSats;
+    } else if (first == null) {
       available = onchainAvailableSats;
     } else {
       // A single recipient can be paid from either balance it can use.
@@ -116,13 +156,17 @@ class SendRecipientList {
     exceedsAvailable = total > available;
   }
 
+  final SendFunding funding;
   final List<SendRecipientCheck> checks = [];
 
   /// The amounts add up to more than any balance that could pay them.
   bool exceedsAvailable = false;
 
-  /// The last recipient gets everything left.
+  /// The last recipient gets everything left on-chain.
   bool maxLast = false;
+
+  /// The only recipient gets everything in Ark.
+  bool maxFromArk = false;
 
   /// The filled rows, in order.
   List<SendRecipientCheck> get recipients => checks.where((check) => !check.isEmpty).toList();

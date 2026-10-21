@@ -5,6 +5,7 @@ import 'package:coconut_wallet/core/transaction/transaction_builder.dart';
 import 'package:coconut_wallet/enums/wallet_enums.dart';
 import 'package:coconut_wallet/model/ark/ark_board.dart';
 import 'package:coconut_wallet/model/ark/ark_payment.dart';
+import 'package:coconut_wallet/model/ark/move.dart';
 import 'package:coconut_wallet/model/utxo/utxo_state.dart';
 import 'package:coconut_wallet/model/wallet/wallet_item_base.dart';
 import 'package:coconut_wallet/providers/ark_provider.dart';
@@ -14,6 +15,7 @@ import 'package:coconut_wallet/services/model/response/recommended_fee.dart';
 import 'package:coconut_wallet/utils/address_util.dart';
 import 'package:coconut_wallet/utils/fee_rate_mixin.dart';
 import 'package:coconut_wallet/utils/payment_request_parser.dart';
+import 'package:coconut_wallet/utils/send_recipients.dart';
 import 'package:flutter/widgets.dart';
 
 /// A way to pay a recipient: from the wallet's UTXOs ([SendOptionKind.onchain]) or from its Ark
@@ -53,6 +55,9 @@ enum SendOptionProblem {
 
   /// The on-chain transaction couldn't be built; [SendOptionStatus.detail] has the error.
   buildFailed,
+
+  /// The Ark server won't take a board of this amount; [SendOptionStatus.detail] says why.
+  boardRefused,
 }
 
 /// Whether an option can be used right now, and what it costs.
@@ -65,7 +70,8 @@ class SendOptionStatus {
   /// Why it can't be used now, if it can't.
   final SendOptionProblem? problem;
 
-  /// The error behind [SendOptionProblem.estimateFailed] or [SendOptionProblem.buildFailed].
+  /// The error behind [SendOptionProblem.estimateFailed], [SendOptionProblem.buildFailed] or
+  /// [SendOptionProblem.boardRefused].
   final String? detail;
 
   /// The problem is a locked Ark wallet, which the user can unlock.
@@ -74,7 +80,7 @@ class SendOptionStatus {
   bool get isReady => problem == null && !isEstimating && feeSats != null;
 }
 
-/// A recipient from Send's first page and the amount it gets (null for the last one with Max).
+/// A recipient from Send's first page and the amount it gets (null when it gets everything).
 class SendRecipientInput {
   const SendRecipientInput(this.request, this.amountSats);
 
@@ -88,6 +94,9 @@ abstract class SendArkAccess {
   bool get isOpen;
   int get spendableSats;
   Future<int> estimateFee(ArkPaymentRail rail, String destination, int amountSats);
+
+  /// The fee to send everything in Ark to [address] on-chain (an offboard; taken out of it).
+  Future<int> estimateEverythingOnchainFee(String address);
   Future<bool> validateAddress(String address);
 }
 
@@ -107,18 +116,25 @@ class ArkProviderSendAccess implements SendArkAccess {
   Future<int> estimateFee(ArkPaymentRail rail, String destination, int amountSats) =>
       _arkProvider.estimatePaymentFee(_walletId, rail, destination: destination, amountSats: amountSats);
   @override
+  Future<int> estimateEverythingOnchainFee(String address) => _arkProvider.estimateMoveOnchainFee(_walletId, address);
+  @override
   Future<bool> validateAddress(String address) => _arkProvider.validateArkAddress(_walletId, address);
 }
 
-/// The second step of Send for a hot wallet with Ark: the ways to pay the recipients chosen on the
-/// first. One recipient can be paid from Ark (Ark, Lightning, on-chain via Ark) or on-chain from
-/// the wallet's UTXOs; several, or Max, only on-chain, in one transaction. The on-chain way builds
-/// the transaction here (UTXOs, fee rate) and hands it to the confirm screen; the Ark ways are
-/// paid by the screen through [ArkProvider].
+/// The second step of Send for a hot wallet with Ark, and of every Move: the ways to pay the
+/// recipients chosen on the first. One recipient can be paid from Ark (Ark, Lightning, on-chain
+/// via Ark) or on-chain from the wallet's UTXOs; several, or everything on-chain, only on-chain,
+/// in one transaction; everything in Ark only from Ark. A move ([funding]) pays only from its
+/// source. The on-chain way builds the transaction here (UTXOs, fee rate, fee taken from the
+/// amount or not) and hands it to the confirm screen; the Ark ways are paid by the screen through
+/// [ArkProvider].
 class SendOptionsViewModel extends ChangeNotifier with FeeRateMixin {
   SendOptionsViewModel({
     required this.recipients,
     this.maxLast = false,
+    this.maxFromArk = false,
+    this.funding = SendFunding.any,
+    this.moveDestination,
     required WalletItemBase wallet,
     required List<UtxoState> utxos,
     required String changeDerivationPath,
@@ -132,10 +148,7 @@ class SendOptionsViewModel extends ChangeNotifier with FeeRateMixin {
        _sendInfoProvider = sendInfoProvider,
        _loadRecommendedFees = loadRecommendedFees ?? FeeService().getRecommendedFees,
        assert(recipients.isNotEmpty) {
-    options =
-        recipients.length == 1 && !maxLast
-            ? _optionsFor(request)
-            : [if (request.bitcoinAddress != null) SendOption(SendOptionKind.onchain, request.bitcoinAddress!)];
+    options = _optionsFor();
     feeRateController.addListener(_onFeeRateTextChanged);
     _refresh();
   }
@@ -144,6 +157,15 @@ class SendOptionsViewModel extends ChangeNotifier with FeeRateMixin {
 
   /// The last recipient gets everything left on-chain.
   final bool maxLast;
+
+  /// The only recipient gets everything in Ark.
+  final bool maxFromArk;
+
+  /// Which balance may pay: any, or a move's source.
+  final SendFunding funding;
+
+  /// A move's destination: for a board, the intent and the Ark server's limits.
+  final MoveDestination? moveDestination;
 
   final WalletItemBase _wallet;
   final List<UtxoState> _unspentUtxos;
@@ -159,6 +181,7 @@ class SendOptionsViewModel extends ChangeNotifier with FeeRateMixin {
 
   List<UtxoState>? _selectedUtxos;
   double? _feeRate;
+  bool _feeSubtracted = false;
 
   TransactionBuildResult? _onchainResult;
   final Map<SendOptionKind, String> _arkKeys = {};
@@ -172,17 +195,28 @@ class SendOptionsViewModel extends ChangeNotifier with FeeRateMixin {
 
   RecommendedFeeFetchStatus _feeFetchStatus = RecommendedFeeFetchStatus.fetching;
 
-  static List<SendOption> _optionsFor(PaymentRequest request) => [
-    if (request.arkAddress != null) SendOption(SendOptionKind.ark, request.arkAddress!, rail: ArkPaymentRail.ark),
-    if (request.lightningInvoice != null)
-      SendOption(SendOptionKind.lightning, request.lightningInvoice!, rail: ArkPaymentRail.lightningInvoice)
-    else if (request.lightningAddress != null)
-      SendOption(SendOptionKind.lightning, request.lightningAddress!, rail: ArkPaymentRail.lightningAddress),
-    if (request.bitcoinAddress != null) ...[
-      SendOption(SendOptionKind.onchain, request.bitcoinAddress!),
-      SendOption(SendOptionKind.onchainViaArk, request.bitcoinAddress!, rail: ArkPaymentRail.onchain),
-    ],
-  ];
+  /// Every way the request can be paid, narrowed to what the recipients and funding allow.
+  List<SendOption> _optionsFor() {
+    final request = this.request;
+    final onchain = [if (request.bitcoinAddress != null) SendOption(SendOptionKind.onchain, request.bitcoinAddress!)];
+    if (recipients.length > 1 || maxLast || funding == SendFunding.onchain) return onchain;
+    final fromArk = [
+      if (request.arkAddress != null) SendOption(SendOptionKind.ark, request.arkAddress!, rail: ArkPaymentRail.ark),
+      if (!maxFromArk && request.lightningInvoice != null)
+        SendOption(SendOptionKind.lightning, request.lightningInvoice!, rail: ArkPaymentRail.lightningInvoice)
+      else if (!maxFromArk && request.lightningAddress != null)
+        SendOption(SendOptionKind.lightning, request.lightningAddress!, rail: ArkPaymentRail.lightningAddress),
+      // Everything in Ark to an Ark address is an Ark payment; to a Bitcoin address, an offboard.
+      if (request.bitcoinAddress != null && !(maxFromArk && request.arkAddress != null))
+        SendOption(SendOptionKind.onchainViaArk, request.bitcoinAddress!, rail: ArkPaymentRail.onchain),
+    ];
+    if (maxFromArk || funding == SendFunding.ark) return fromArk;
+    return [
+      ...fromArk.where((option) => option.kind != SendOptionKind.onchainViaArk),
+      ...onchain,
+      ...fromArk.where((option) => option.kind == SendOptionKind.onchainViaArk),
+    ];
+  }
 
   // --- Recipients and amounts ---
 
@@ -191,16 +225,30 @@ class SendOptionsViewModel extends ChangeNotifier with FeeRateMixin {
 
   bool get isBatch => recipients.length > 1;
 
-  bool get isMaxMode => maxLast;
+  bool get isMaxMode => maxLast || maxFromArk;
 
-  /// What recipient [index] gets. With Max the last one gets what's left of the on-chain funds
-  /// after the others and the fee, known once the transaction is built.
+  bool get isBoard => moveDestination?.isBoard ?? false;
+
+  /// What recipient [index] gets with the selected option. With everything on-chain the last one
+  /// gets what's left after the others and the fee; with the fee taken from the amount, the last
+  /// one gets its amount less the fee; with everything in Ark, the balance less the fee.
   int? amountOf(int index) {
-    if (maxLast && index == recipients.length - 1) {
+    final isLast = index == recipients.length - 1;
+    if (_selected?.usesArk ?? false) {
+      if (!maxFromArk) return recipients[index].amountSats;
+      final fee = _arkFees[_selected!.kind];
+      return fee == null ? null : _ark.spendableSats - fee;
+    }
+    if (maxLast && isLast) {
       final fee = onchainFeeSats;
       return fee == null ? null : onchainAvailableSats - _othersTotal - fee;
     }
-    return recipients[index].amountSats;
+    final amount = recipients[index].amountSats;
+    if (_feeSubtracted && isLast && amount != null) {
+      final fee = onchainFeeSats;
+      return fee == null ? null : amount - fee;
+    }
+    return amount;
   }
 
   /// What the first recipient gets; for a single recipient, the payment's amount.
@@ -217,11 +265,17 @@ class SendOptionsViewModel extends ChangeNotifier with FeeRateMixin {
     return total;
   }
 
-  /// The fixed amounts of every recipient but a Max one.
+  /// The fixed amounts of every recipient but an "everything" one.
   int get _othersTotal => [
     for (var i = 0; i < recipients.length; i++)
       if (!(maxLast && i == recipients.length - 1)) recipients[i].amountSats ?? 0,
   ].fold(0, (total, amount) => total + amount);
+
+  /// What an Ark option pays: the amount entered, or everything in Ark less [fee].
+  int? _arkAmount({int? fee}) {
+    if (!maxFromArk) return recipients.first.amountSats;
+    return fee == null ? _ark.spendableSats : _ark.spendableSats - fee;
+  }
 
   // --- Balances ---
 
@@ -243,7 +297,7 @@ class SendOptionsViewModel extends ChangeNotifier with FeeRateMixin {
     _refresh();
   }
 
-  // --- Fee rate ---
+  // --- Fee rate and fee ---
 
   double? get feeRate => _feeRate;
 
@@ -269,14 +323,18 @@ class SendOptionsViewModel extends ChangeNotifier with FeeRateMixin {
     _notify();
   }
 
-  /// For the fee sheet's field: true when the rate typed is below the minimum.
-  bool onFeeRateChanged(String text) => handleFeeRateChanged(text, (_) {});
+  /// For the fee rate field: keeps what was typed within the field's format, and returns true
+  /// when the rate is below the minimum.
+  bool onFeeRateChanged(String text) => handleFeeRateChanged(text, (formatted) {
+    final display = formatted.replaceAll('.', NumberFormatConfig.instance.decimalSeparator);
+    if (feeRateController.text != display) feeRateController.text = display;
+  });
 
   void setFeeRateFromRecommendation(double satsPerVb) {
     feeRateController.text = _formatFeeRate(satsPerVb);
   }
 
-  /// After the fee sheet closes: no trailing separator, and never a zero rate.
+  /// When the field loses focus: no trailing separator, and never a zero rate.
   void tidyFeeRate() {
     final text = removeTrailingDotInFeeRateText(feeRateController.text);
     if (text != feeRateController.text) feeRateController.text = text;
@@ -293,6 +351,16 @@ class SendOptionsViewModel extends ChangeNotifier with FeeRateMixin {
     final parsed = double.tryParse(normalizeNumTextForNumParsing(feeRateController.text));
     if (parsed == null || parsed <= 0 || parsed == _feeRate) return;
     _feeRate = parsed;
+    _refresh();
+  }
+
+  /// "Fee subtracted from send amount": the last recipient pays the fee. Always on with
+  /// everything on-chain, whose last recipient gets what's left.
+  bool get isFeeSubtractedFromAmount => maxLast || _feeSubtracted;
+
+  void setFeeSubtracted(bool on) {
+    if (_feeSubtracted == on) return;
+    _feeSubtracted = on;
     _refresh();
   }
 
@@ -320,15 +388,18 @@ class SendOptionsViewModel extends ChangeNotifier with FeeRateMixin {
   /// Change too small to keep, added to the fee.
   int? get unintendedDustFee => _onchainResult?.unintendedDustFee;
 
+  /// What the board output gets, for the Ark server's limits and fee.
+  int? get boardAmountSats => isBoard ? amountOf(0) : null;
+
   SendOptionStatus statusOf(SendOption option) {
     if (option.kind == SendOptionKind.onchain) return _onchainStatus();
     if (!_ark.isSupported) return const SendOptionStatus(problem: SendOptionProblem.noArk);
     if (isBatch) return const SendOptionStatus(problem: SendOptionProblem.oneDestination);
     if (maxLast) return const SendOptionStatus(problem: SendOptionProblem.maxOnchainOnly);
     if (!_ark.isOpen) return const SendOptionStatus(problem: SendOptionProblem.arkLocked);
-    final amount = amountSats;
-    if (amount == null || amount <= 0) return const SendOptionStatus(problem: SendOptionProblem.needsAmount);
-    if (option.kind == SendOptionKind.onchainViaArk && amount <= ArkBoardTerms.dustLimitSats) {
+    final requested = _arkAmount();
+    if (requested == null || requested <= 0) return const SendOptionStatus(problem: SendOptionProblem.needsAmount);
+    if (!maxFromArk && option.kind == SendOptionKind.onchainViaArk && requested <= ArkBoardTerms.dustLimitSats) {
       return const SendOptionStatus(problem: SendOptionProblem.belowDust);
     }
     if (_arkEstimating.contains(option.kind)) return const SendOptionStatus(isEstimating: true);
@@ -336,7 +407,13 @@ class SendOptionsViewModel extends ChangeNotifier with FeeRateMixin {
     if (problem != null) return SendOptionStatus(problem: problem.problem, detail: problem.detail);
     final fee = _arkFees[option.kind];
     if (fee == null) return const SendOptionStatus(isEstimating: true);
-    if (amount + fee > _ark.spendableSats) return SendOptionStatus(feeSats: fee, problem: SendOptionProblem.notEnoughArk);
+    final amount = _arkAmount(fee: fee)!;
+    if (option.kind == SendOptionKind.onchainViaArk && amount <= ArkBoardTerms.dustLimitSats) {
+      return SendOptionStatus(feeSats: fee, problem: SendOptionProblem.belowDust);
+    }
+    if (amount <= 0 || (!maxFromArk && amount + fee > _ark.spendableSats)) {
+      return SendOptionStatus(feeSats: fee, problem: SendOptionProblem.notEnoughArk);
+    }
     return SendOptionStatus(feeSats: fee);
   }
 
@@ -356,10 +433,22 @@ class SendOptionsViewModel extends ChangeNotifier with FeeRateMixin {
     }
     final result = _onchainResult;
     if (result == null) return const SendOptionStatus(isEstimating: true);
-    if (result.isSuccess) return SendOptionStatus(feeSats: result.estimatedFee);
+    if (result.isSuccess) {
+      final terms = moveDestination?.boardTerms;
+      final boardAmount = boardAmountSats;
+      final refused = terms == null || boardAmount == null ? null : terms.check(boardAmount);
+      if (refused != null) {
+        return SendOptionStatus(feeSats: result.estimatedFee, problem: SendOptionProblem.boardRefused, detail: refused);
+      }
+      return SendOptionStatus(feeSats: result.estimatedFee);
+    }
     final error = result.exception;
-    if (error is InsufficientBalanceException) return const SendOptionStatus(problem: SendOptionProblem.notEnoughOnchain);
-    if (error is SendAmountTooLowException) return const SendOptionStatus(problem: SendOptionProblem.tooSmallForFee);
+    if (error is InsufficientBalanceException) {
+      return const SendOptionStatus(problem: SendOptionProblem.notEnoughOnchain);
+    }
+    if (error is SendAmountTooLowException) {
+      return const SendOptionStatus(problem: SendOptionProblem.tooSmallForFee);
+    }
     return SendOptionStatus(problem: SendOptionProblem.buildFailed, detail: error?.toString());
   }
 
@@ -369,9 +458,19 @@ class SendOptionsViewModel extends ChangeNotifier with FeeRateMixin {
     return option != null && statusOf(option).isReady;
   }
 
+  /// What an Ark payment of the selected option sends: the amount, or for everything in Ark the
+  /// balance less the fee (null for an offboard of everything, which bark computes itself).
+  int? get arkPaymentAmountSats {
+    final option = _selected;
+    if (option == null || !option.usesArk) return null;
+    if (maxFromArk && option.kind == SendOptionKind.onchainViaArk) return null;
+    return _arkAmount(fee: maxFromArk ? _arkFees[option.kind] : null);
+  }
+
   // --- On-chain hand-off ---
 
-  /// Fills [SendInfoProvider] for the confirm screen with the built transaction.
+  /// Fills [SendInfoProvider] for the confirm screen with the built transaction (and, for a
+  /// board, the intent the broadcast registers with the Ark server).
   void saveOnchainForConfirm(SendEntryPoint entryPoint) {
     final transaction = _onchainResult?.transaction;
     if (transaction == null || _feeRate == null) throw StateError('No on-chain transaction to confirm');
@@ -383,6 +482,7 @@ class SendOptionsViewModel extends ChangeNotifier with FeeRateMixin {
     _sendInfoProvider.setWalletImportSource(_wallet.walletImportSource);
     _sendInfoProvider.setFeeRate(_feeRate!);
     _sendInfoProvider.setIsMaxMode(maxLast);
+    _sendInfoProvider.setArkBoard(moveDestination?.board);
   }
 
   // --- Internals ---
@@ -403,7 +503,8 @@ class SendOptionsViewModel extends ChangeNotifier with FeeRateMixin {
     final option = onchainOption;
     final feeRate = _feeRate;
     if (option == null || feeRate == null || onchainAvailableSats <= 0) return;
-    // In order: with Max the last recipient gets the rest, and the builder takes the fee from it.
+    // In order: with everything on-chain the last recipient gets the rest, and the builder takes
+    // the fee from it (as it does with the fee taken from the amount).
     final outputs = <String, int>{};
     for (var i = 0; i < recipients.length; i++) {
       final address = recipients[i].request.bitcoinAddress;
@@ -430,34 +531,34 @@ class SendOptionsViewModel extends ChangeNotifier with FeeRateMixin {
           feeRate: feeRate,
           changeDerivationPath: _changeDerivationPath,
           walletItemBase: _wallet,
-          isFeeSubtractedFromAmount: maxLast,
+          isFeeSubtractedFromAmount: isFeeSubtractedFromAmount,
           isUtxoFixed: _selectedUtxos != null,
         ).build();
   }
 
   void _estimateArk() {
-    final amount = amountSats;
+    final requested = _arkAmount();
     for (final option in options.where((option) => option.usesArk)) {
       final kind = option.kind;
       final blocked =
           !_ark.isSupported ||
           !_ark.isOpen ||
           maxLast ||
-          amount == null ||
-          amount <= 0 ||
-          (kind == SendOptionKind.onchainViaArk && amount <= ArkBoardTerms.dustLimitSats);
+          requested == null ||
+          requested <= 0 ||
+          (!maxFromArk && kind == SendOptionKind.onchainViaArk && requested <= ArkBoardTerms.dustLimitSats);
       if (blocked) {
         _arkKeys.remove(kind);
         _arkEstimating.remove(kind);
         continue;
       }
-      final key = '${option.destination}:$amount';
+      final key = '${option.destination}:$requested:$maxFromArk';
       if (_arkKeys[kind] == key) continue;
       _arkKeys[kind] = key;
       _arkEstimating.add(kind);
       _arkFees.remove(kind);
       _arkProblems.remove(kind);
-      _estimateOne(option, amount, key);
+      _estimateOne(option, requested, key);
     }
   }
 
@@ -467,6 +568,8 @@ class SendOptionsViewModel extends ChangeNotifier with FeeRateMixin {
     try {
       if (option.kind == SendOptionKind.ark && !await _ark.validateAddress(option.destination)) {
         problem = (problem: SendOptionProblem.arkAddressRefused, detail: null);
+      } else if (maxFromArk && option.kind == SendOptionKind.onchainViaArk) {
+        fee = await _ark.estimateEverythingOnchainFee(option.destination);
       } else {
         fee = await _ark.estimateFee(option.rail!, option.destination, amount);
       }

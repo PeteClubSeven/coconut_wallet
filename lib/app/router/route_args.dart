@@ -4,6 +4,7 @@ import 'package:coconut_wallet/enums/fiat_enums.dart';
 import 'package:coconut_wallet/enums/wallet_enums.dart';
 import 'package:coconut_wallet/model/utxo/utxo_state.dart';
 import 'package:coconut_wallet/model/ark/ark_vtxo.dart';
+import 'package:coconut_wallet/model/ark/move.dart';
 import 'package:coconut_wallet/model/wallet/transaction_record.dart';
 import 'package:coconut_wallet/providers/send_info_provider.dart';
 import 'package:coconut_wallet/screens/wallet_detail/transaction_fee_bumping_screen.dart';
@@ -49,11 +50,15 @@ class SendRecipientRouteArgs {
   final SendEntryPoint sendEntryPoint;
   final String? initialInput;
   final int? initialAmountSats;
+
+  /// A move: [id] is the source's wallet and the first recipient is the destination.
+  final MoveSelection? move;
   const SendRecipientRouteArgs({
     required this.id,
     required this.sendEntryPoint,
     this.initialInput,
     this.initialAmountSats,
+    this.move,
   });
 }
 
@@ -68,20 +73,26 @@ class SendRecipientArg {
 class SendOptionsRouteArgs {
   final int id;
   final List<SendRecipientArg> recipients;
+
+  /// The last recipient gets everything left on-chain.
   final bool maxLast;
+
+  /// The only recipient gets everything in Ark.
+  final bool maxFromArk;
   final SendEntryPoint sendEntryPoint;
+
+  /// A move, and where its first recipient (the destination) pays.
+  final MoveSelection? move;
+  final MoveDestination? moveDestination;
   const SendOptionsRouteArgs({
     required this.id,
     required this.recipients,
     required this.sendEntryPoint,
     this.maxLast = false,
+    this.maxFromArk = false,
+    this.move,
+    this.moveDestination,
   });
-}
-
-class ArkToOnchainRouteArgs {
-  final int id;
-  final int destinationWalletId;
-  const ArkToOnchainRouteArgs({required this.id, required this.destinationWalletId});
 }
 
 class ArkMovementDetailRouteArgs {
@@ -146,8 +157,6 @@ class SendRouteArgs {
   final List<UtxoState>? selectedUtxoList;
   final String? initialBitcoinUri;
 
-  /// Board into this hot wallet's Ark wallet: the recipient is its board funding address.
-  final int? boardIntoWalletId;
   const SendRouteArgs({
     this.id,
     this.isMoveToVault = false,
@@ -157,7 +166,6 @@ class SendRouteArgs {
     this.initialSatsFromP2P,
     this.selectedUtxoList,
     this.initialBitcoinUri,
-    this.boardIntoWalletId,
   });
 }
 

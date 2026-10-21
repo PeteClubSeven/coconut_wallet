@@ -13,17 +13,20 @@ import 'package:coconut_lib/coconut_lib.dart';
 import 'package:coconut_wallet/app/router/app_route_names.dart';
 import 'package:coconut_wallet/app/router/route_args.dart';
 import 'package:coconut_wallet/config/number_format_config.dart';
-import 'package:coconut_wallet/constants/app_language.dart';
 import 'package:coconut_wallet/constants/icon_path.dart';
+import 'package:coconut_wallet/constants/lottie_path.dart';
 import 'package:coconut_wallet/design_system/context/coconut_theme_context_extension.dart';
 import 'package:coconut_wallet/enums/fiat_enums.dart';
 import 'package:coconut_wallet/extensions/string_extensions.dart';
 import 'package:coconut_wallet/localization/strings.g.dart';
+import 'package:coconut_wallet/model/ark/ark_board.dart';
+import 'package:coconut_wallet/model/ark/move.dart';
 import 'package:coconut_wallet/model/utxo/utxo_state.dart';
 import 'package:coconut_wallet/providers/ark_provider.dart';
 import 'package:coconut_wallet/providers/preferences/preference_provider.dart';
 import 'package:coconut_wallet/providers/send_info_provider.dart';
 import 'package:coconut_wallet/providers/wallet_provider.dart';
+import 'package:coconut_wallet/screens/ark/ark_unlock_flow.dart';
 import 'package:coconut_wallet/ui/coconut/coconut_app_bar.dart';
 import 'package:coconut_wallet/ui/coconut/coconut_overlays.dart';
 import 'package:coconut_wallet/ui/coconut/coconut_text_field.dart';
@@ -41,15 +44,20 @@ import 'package:coconut_wallet/widgets/features/ark/ark_ui.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_svg/flutter_svg.dart';
+import 'package:lottie/lottie.dart';
 import 'package:provider/provider.dart';
 
-/// Step 1 of Send for a hot wallet with Ark: who to pay and how much, laid out like Coconut's
-/// send screen. Each recipient is a page with the big amount (typed on the system keypad through a
-/// hidden field), the "Send All" and "Add recipient" pills and the address field; the last page is
-/// the dashed "Add Recipient" card. A destination can be a Bitcoin or Ark address, a Lightning
-/// invoice or address, or a BIP321 code, whose amount fills in and locks. Several recipients are
-/// paid on-chain in one transaction, so they need Bitcoin addresses. Step 2
-/// ([AppRouteNames.sendOptions]) chooses how to pay.
+/// Step 1 of Send for a hot wallet with Ark, and of every Move: who to pay and how much, laid out
+/// like Coconut's send screen. Each recipient is a page with the big amount (typed on the system
+/// keypad through a hidden field) and the address field; swiping left reaches the dashed "Add
+/// Recipient" card, as on the send screen. Under the pages, the balance boxes fill the amount with
+/// everything in that balance. A destination can be a Bitcoin or Ark address, a Lightning invoice
+/// or address, or a BIP321 code, whose amount fills in and locks. Several recipients are paid
+/// on-chain in one transaction, so they need Bitcoin addresses.
+///
+/// For a move ([move]) the first recipient is the destination, shown as a card instead of the
+/// field, and only the source's balance pays; more recipients can follow unless the source is Ark
+/// (Ark pays one destination). Step 2 ([AppRouteNames.sendOptions]) chooses how to pay.
 class SendRecipientScreen extends StatefulWidget {
   const SendRecipientScreen({
     super.key,
@@ -57,8 +65,10 @@ class SendRecipientScreen extends StatefulWidget {
     required this.sendEntryPoint,
     this.initialInput,
     this.initialAmountSats,
+    this.move,
   });
 
+  /// The paying wallet: for a move, the source's (a vault, or the hot wallet).
   final int id;
   final SendEntryPoint sendEntryPoint;
 
@@ -69,6 +79,8 @@ class SendRecipientScreen extends StatefulWidget {
   /// An amount already entered for it (handed back by the on-chain send screen).
   final int? initialAmountSats;
 
+  final MoveSelection? move;
+
   @override
   State<SendRecipientScreen> createState() => _SendRecipientScreenState();
 }
@@ -78,7 +90,9 @@ class _RecipientRow {
   final TextEditingController destination = TextEditingController();
   final FocusNode destinationFocus = FocusNode();
   String amount = '';
-  bool isMax = false;
+
+  /// Everything in this balance, picked with its balance box.
+  SendMaxSource? maxSource;
 
   /// The amount came from the destination (an invoice or code) and can't be edited.
   bool amountLocked = false;
@@ -90,7 +104,7 @@ class _RecipientRow {
 }
 
 class _SendRecipientScreenState extends State<SendRecipientScreen> {
-  static const double _pageHeight = 226;
+  static const double _pageHeight = 200;
   static const double _amountHeight = 34;
 
   final List<_RecipientRow> _rows = [];
@@ -103,7 +117,24 @@ class _SendRecipientScreenState extends State<SendRecipientScreen> {
   late final int _onchainAvailableSats;
   late BitcoinUnit _unit;
 
+  /// The send screen's first-run hint for the hidden "Add Recipient" card.
+  bool _isSwipeGuideVisible = false;
+
+  /// A move's destination, once its address is known (a board needs the Ark wallet first).
+  MoveDestination? _moveDestination;
+
   _RecipientRow? get _currentRow => _page < _rows.length ? _rows[_page] : null;
+
+  bool get _isMove => widget.move != null;
+
+  SendFunding get _funding => switch (widget.move?.from.kind) {
+    null => SendFunding.any,
+    MoveEndpointKind.ark => SendFunding.ark,
+    MoveEndpointKind.onchain || MoveEndpointKind.vault => SendFunding.onchain,
+  };
+
+  /// Ark pays one destination, so a move out of Ark has no more recipients.
+  bool get _canAddRecipients => _funding != SendFunding.ark;
 
   @override
   void initState() {
@@ -120,21 +151,31 @@ class _SendRecipientScreenState extends State<SendRecipientScreen> {
       if (mounted) setState(() {});
     });
     final first = _addRow();
-    final initial = widget.initialInput?.trim();
-    if (initial != null && initial.isNotEmpty) {
-      first.destination.text = initial;
-      _applyDestination(first);
-      final amount = widget.initialAmountSats;
-      if (!first.amountLocked && amount != null && amount > 0) first.amount = SendAmountText.fromSats(amount, _unit);
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (!mounted) return;
-        if (_check().canContinue) {
-          _next();
-        } else if (first.amountLocked) {
-          first.destinationFocus.requestFocus();
-        } else {
-          _focusAmount();
-        }
+    if (_isMove) {
+      WidgetsBinding.instance.addPostFrameCallback((_) => _resolveMove(first));
+    } else {
+      final initial = widget.initialInput?.trim();
+      if (initial != null && initial.isNotEmpty) {
+        first.destination.text = initial;
+        _applyDestination(first);
+        final amount = widget.initialAmountSats;
+        if (!first.amountLocked && amount != null && amount > 0) first.amount = SendAmountText.fromSats(amount, _unit);
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (!mounted) return;
+          if (_check().canContinue) {
+            _next();
+          } else if (first.amountLocked) {
+            first.destinationFocus.requestFocus();
+          } else {
+            _focusAmount();
+          }
+        });
+      }
+    }
+    if (_canAddRecipients && !context.read<PreferenceProvider>().hasSeenAddRecipientCard) {
+      WidgetsBinding.instance.addPostFrameCallback((_) async {
+        await Future.delayed(const Duration(milliseconds: 300));
+        if (mounted) setState(() => _isSwipeGuideVisible = true);
       });
     }
   }
@@ -150,12 +191,51 @@ class _SendRecipientScreenState extends State<SendRecipientScreen> {
     super.dispose();
   }
 
+  // --- A move's destination ---
+
+  /// Finds where the move pays: the destination's next receive address, or for a board into Ark
+  /// its funding address (the Ark wallet opens for that). Leaves the screen if that fails.
+  Future<void> _resolveMove(_RecipientRow first) async {
+    final move = widget.move!;
+    final MoveDestination destination;
+    try {
+      if (move.to.kind == MoveEndpointKind.ark) {
+        final arkProvider = context.read<ArkProvider>();
+        if (!await openArkWalletForSession(context, move.to.walletId, userInitiated: true)) {
+          if (mounted) Navigator.pop(context);
+          return;
+        }
+        final funding = await arkProvider.boardFunding(move.to.walletId);
+        final terms = await arkProvider.boardTerms(move.to.walletId);
+        destination = MoveDestination(
+          address: funding.address,
+          board: ArkBoardIntent(walletId: move.to.walletId, funding: funding),
+          boardTerms: terms,
+        );
+      } else {
+        final address = context.read<WalletProvider>().getReceiveAddress(move.to.walletId).address;
+        destination = MoveDestination(address: address);
+      }
+    } catch (error) {
+      if (!mounted) return;
+      await showArkError(context, t.ark.move.prepare_failed, '$error');
+      if (mounted) Navigator.pop(context);
+      return;
+    }
+    if (!mounted) return;
+    setState(() {
+      _moveDestination = destination;
+      first.destination.text = destination.address;
+    });
+    _focusAmount();
+  }
+
   // --- Rows and pages ---
 
   _RecipientRow _addRow() {
     final row = _RecipientRow();
     for (final other in _rows) {
-      other.isMax = false; // Send All is only for the last recipient
+      if (other.maxSource == SendMaxSource.onchain) other.maxSource = null; // only the last takes the rest
     }
     row.destination.addListener(() {
       _applyDestination(row);
@@ -180,7 +260,7 @@ class _SendRecipientScreenState extends State<SendRecipientScreen> {
 
   void _deleteCurrent() {
     final row = _currentRow;
-    if (row == null || _rows.length < 2) return;
+    if (row == null || _rows.length < 2 || (_isMove && row == _rows.first)) return;
     _clearFocus();
     setState(() {
       _rows.remove(row);
@@ -192,7 +272,12 @@ class _SendRecipientScreenState extends State<SendRecipientScreen> {
 
   void _onPageChanged(int page) {
     _clearFocus();
+    if (page == _rows.length) context.read<PreferenceProvider>().setHasSeenAddRecipientCard();
     setState(() => _page = page);
+  }
+
+  void _hideSwipeGuide() {
+    if (_isSwipeGuideVisible) setState(() => _isSwipeGuideVisible = false);
   }
 
   /// Fills in and locks the amount when the destination carries one, and unlocks it when it no
@@ -203,7 +288,7 @@ class _SendRecipientScreenState extends State<SendRecipientScreen> {
     if (fixed != null) {
       row.amount = SendAmountText.fromSats(fixed, _unit);
       row.amountLocked = true;
-      row.isMax = false;
+      row.maxSource = null;
     } else if (row.amountLocked) {
       row.amountLocked = false;
       row.amount = '';
@@ -223,16 +308,63 @@ class _SendRecipientScreenState extends State<SendRecipientScreen> {
     }
   }
 
-  void _toggleMax(_RecipientRow row) {
+  // --- Balance boxes: everything in that balance ---
+
+  /// Whether the current row may take everything in [source] (the box is enabled).
+  bool _canUseMax(SendMaxSource source, SendRecipientCheck? check, {required int arkAvailable}) {
+    final row = _currentRow;
+    if (row == null || row.amountLocked) return false;
+    final request = check?.request;
+    switch (source) {
+      case SendMaxSource.onchain:
+        if (_funding == SendFunding.ark || _onchainAvailableSats <= 0) return false;
+        // On-chain coins pay Bitcoin addresses only, and everything left goes to the last row.
+        if (request != null && request.bitcoinAddress == null) return false;
+        return _page == _rows.length - 1;
+      case SendMaxSource.ark:
+        if (_funding == SendFunding.onchain || arkAvailable <= 0 || _rows.length > 1) return false;
+        if (!_isMove && !context.read<ArkProvider>().supportsArkById(widget.id)) return false;
+        return request == null || request.bitcoinAddress != null || request.arkAddress != null;
+    }
+  }
+
+  void _toggleMax(SendMaxSource source) {
+    final row = _currentRow;
+    if (row == null) return;
     _clearFocus();
-    setState(() => row.isMax = !row.isMax);
+    setState(() {
+      if (row.maxSource == source) {
+        row.maxSource = null;
+        row.amount = '';
+      } else {
+        row.maxSource = source;
+      }
+    });
+  }
+
+  /// What a row taking everything shows: the balance, less the other rows on-chain. The fee comes
+  /// out of it on step 2.
+  int _maxAmountSats(_RecipientRow row, {required int arkAvailable}) {
+    if (row.maxSource == SendMaxSource.ark) return arkAvailable;
+    var others = 0;
+    for (final other in _rows) {
+      if (other != row) others += SendAmountText.toSats(other.amount, _unit) ?? 0;
+    }
+    return (_onchainAvailableSats - others).clamp(0, _onchainAvailableSats);
   }
 
   // --- Amount, typed on the system keypad through a hidden field (as the send screen) ---
 
   void _focusAmount() {
     final row = _currentRow;
-    if (row == null || row.amountLocked || row.isMax) return;
+    if (row == null || row.amountLocked) return;
+    if (row.maxSource != null) {
+      // Typing replaces "everything" with an amount.
+      setState(() {
+        row.maxSource = null;
+        row.amount = '';
+      });
+    }
     _syncAmountField(row.amount);
     _amountFocusNode.requestFocus();
   }
@@ -285,17 +417,21 @@ class _SendRecipientScreenState extends State<SendRecipientScreen> {
         SendRecipientRow(
           row.destination.text,
           enteredAmountSats: SendAmountText.toSats(row.amount, _unit),
-          isMax: row.isMax,
+          maxSource: row.maxSource,
         ),
     ],
     network: NetworkType.currentNetworkType,
     onchainAvailableSats: _onchainAvailableSats,
-    arkAvailableSats: arkAvailableSats ?? context.read<ArkProvider>().balance(widget.id)?.spendable ?? 0,
+    arkAvailableSats: arkAvailableSats ?? _arkAvailable(context.read<ArkProvider>()),
+    funding: _funding,
   );
+
+  /// The Ark balance that can pay: the source's for a move out of Ark, else this wallet's.
+  int _arkAvailable(ArkProvider ark) => ark.balance(widget.move?.from.walletId ?? widget.id)?.spendable ?? 0;
 
   Future<void> _next() async {
     final check = _check();
-    if (!check.canContinue) return;
+    if (!check.canContinue || (_isMove && _moveDestination == null)) return;
     _clearFocus();
     await Navigator.pushNamed(
       context,
@@ -308,7 +444,10 @@ class _SendRecipientScreenState extends State<SendRecipientScreen> {
               SendRecipientArg(_rows[i].destination.text.trim(), check.checks[i].amountSats),
         ],
         maxLast: check.maxLast,
+        maxFromArk: check.maxFromArk,
         sendEntryPoint: widget.sendEntryPoint,
+        move: widget.move,
+        moveDestination: _moveDestination,
       ),
     );
   }
@@ -318,9 +457,10 @@ class _SendRecipientScreenState extends State<SendRecipientScreen> {
   @override
   Widget build(BuildContext context) {
     final colors = context.coconutColors;
-    final arkAvailable = context.select<ArkProvider, int>((ark) => ark.balance(widget.id)?.spendable ?? 0);
+    final arkAvailable = context.select<ArkProvider, int>(_arkAvailable);
     final check = _check(arkAvailableSats: arkAvailable);
     final keyboardHeight = MediaQuery.viewInsetsOf(context).bottom;
+    final pageCount = _rows.length + (_canAddRecipients ? 1 : 0);
     return Scaffold(
       resizeToAvoidBottomInset: false,
       backgroundColor: colors.background,
@@ -334,32 +474,38 @@ class _SendRecipientScreenState extends State<SendRecipientScreen> {
               child: Column(
                 children: [
                   _buildInvisibleAmountField(),
-                  SizedBox(
-                    height: _pageHeight,
-                    child: Stack(
-                      children: [
-                        PageView.builder(
-                          controller: _pageController,
-                          onPageChanged: _onPageChanged,
-                          itemCount: _rows.length + 1,
-                          itemBuilder:
-                              (context, index) =>
-                                  index == _rows.length
-                                      ? _buildAddRecipientCard()
-                                      : _buildRecipientPage(
-                                        index,
-                                        check.checks[index],
-                                        isLast: index == _rows.length - 1,
-                                        exceedsAvailable: check.exceedsAvailable,
-                                      ),
-                        ),
-                        if (_rows.length > 1 && _page < _rows.length) _buildCounter(),
-                      ],
+                  Listener(
+                    behavior: HitTestBehavior.translucent,
+                    onPointerDown: (_) => _hideSwipeGuide(),
+                    onPointerMove: (_) => _hideSwipeGuide(),
+                    child: SizedBox(
+                      height: _pageHeight,
+                      child: Stack(
+                        children: [
+                          PageView.builder(
+                            controller: _pageController,
+                            onPageChanged: _onPageChanged,
+                            itemCount: pageCount,
+                            itemBuilder:
+                                (context, index) =>
+                                    index == _rows.length
+                                        ? _buildAddRecipientCard()
+                                        : _buildRecipientPage(
+                                          index,
+                                          check.checks[index],
+                                          exceedsAvailable: check.exceedsAvailable,
+                                          arkAvailable: arkAvailable,
+                                        ),
+                          ),
+                          if (_rows.length > 1 && _page < _rows.length) _buildCounter(),
+                          _buildSwipeGuide(),
+                        ],
+                      ),
                     ),
                   ),
                   Padding(
                     padding: const EdgeInsets.symmetric(horizontal: 16),
-                    child: Column(children: [_buildBalances(arkAvailable), _buildTooltips(check)]),
+                    child: Column(children: [_buildBalances(check, arkAvailable: arkAvailable), _buildTooltips(check)]),
                   ),
                 ],
               ),
@@ -369,7 +515,7 @@ class _SendRecipientScreenState extends State<SendRecipientScreen> {
             FixedBottomButton(
               onButtonClicked: _next,
               text: t.next,
-              isActive: check.canContinue,
+              isActive: check.canContinue && (!_isMove || _moveDestination != null),
               showSurroundings: false,
               isVisibleAboveKeyboard: false,
               subWidget:
@@ -386,33 +532,37 @@ class _SendRecipientScreenState extends State<SendRecipientScreen> {
     );
   }
 
-  /// The send screen's app bar, with the wallet name; what's available is under the recipients.
+  /// The send screen's app bar with the wallet name; for a move, where it goes.
   PreferredSizeWidget _buildAppBar() {
+    final move = widget.move;
     return CoconutAppBar.build(
       context: context,
-      title: _walletName,
+      title: move == null ? _walletName : t.ark.move.screen_title(destination: moveEndpointText(move.to)),
       isBottom: true,
       backgroundColor: context.coconutColors.background,
     );
   }
 
-  /// What each balance has available, right under the recipient field.
-  Widget _buildBalances(int arkAvailable) {
+  /// What each balance has available, right under the recipients; tapping one sends everything in
+  /// it. A move shows only its source's.
+  Widget _buildBalances(SendRecipientList check, {required int arkAvailable}) {
+    final row = _currentRow;
+    final rowCheck = row == null ? null : check.checks[_page];
+    Widget box(SendMaxSource source, String label, int sats) => Expanded(
+      child: ArkBalanceBox(
+        label: label,
+        amount: _unit.displayBitcoinAmount(sats, withUnit: true),
+        onPressed: () => _toggleMax(source),
+        isEnabled: _canUseMax(source, rowCheck, arkAvailable: arkAvailable),
+        isSelected: row?.maxSource == source,
+      ),
+    );
     return Row(
       children: [
-        Expanded(
-          child: ArkBalanceBox(
-            label: t.ark.send.available_onchain,
-            amount: _unit.displayBitcoinAmount(_onchainAvailableSats, withUnit: true),
-          ),
-        ),
-        CoconutLayout.spacing_200w,
-        Expanded(
-          child: ArkBalanceBox(
-            label: t.ark.send.available_ark,
-            amount: _unit.displayBitcoinAmount(arkAvailable, withUnit: true),
-          ),
-        ),
+        if (_funding != SendFunding.ark)
+          box(SendMaxSource.onchain, t.ark.send.available_onchain, _onchainAvailableSats),
+        if (_funding == SendFunding.any) CoconutLayout.spacing_200w,
+        if (_funding != SendFunding.onchain) box(SendMaxSource.ark, t.ark.send.available_ark, arkAvailable),
       ],
     );
   }
@@ -435,29 +585,15 @@ class _SendRecipientScreenState extends State<SendRecipientScreen> {
     );
   }
 
-  /// One recipient, as the send screen's recipient page.
+  /// One recipient, as the send screen's recipient page; a move's destination is a fixed card.
   Widget _buildRecipientPage(
     int index,
     SendRecipientCheck check, {
-    required bool isLast,
     required bool exceedsAvailable,
+    required int arkAvailable,
   }) {
-    final colors = context.coconutColors;
     final row = _rows[index];
-    final request = check.request;
-    final problem = check.problem == SendRecipientProblem.needsAmount ? null : recipientProblemText(check);
-    final String note;
-    if (problem != null) {
-      note = problem;
-    } else if (request == null) {
-      note = '';
-    } else if (row.amountLocked) {
-      final setBy =
-          request.kind == PaymentRequestKind.lightningInvoice ? t.ark.send.set_by_invoice : t.ark.send.set_by_code;
-      note = '${describePaymentRequest(request, _unit)} · $setBy';
-    } else {
-      note = describePaymentRequest(request, _unit);
-    }
+    final isMoveDestination = _isMove && index == 0;
     return Stack(
       children: [
         GestureDetector(
@@ -468,7 +604,7 @@ class _SendRecipientScreenState extends State<SendRecipientScreen> {
               _focusAmount();
             }
           },
-          child: Container(color: Colors.transparent, width: double.infinity, height: _amountHeight + 80),
+          child: Container(color: Colors.transparent, width: double.infinity, height: _amountHeight + 60),
         ),
         Padding(
           padding: const EdgeInsets.only(top: 40, left: 16, right: 16),
@@ -477,59 +613,13 @@ class _SendRecipientScreenState extends State<SendRecipientScreen> {
               IgnorePointer(
                 child: SizedBox(
                   height: _amountHeight,
-                  child: FittedBox(child: _buildAmount(row, exceedsAvailable: exceedsAvailable)),
-                ),
-              ),
-              CoconutLayout.spacing_200h,
-              _buildPills(row, check, isLast: isLast),
-              CoconutLayout.spacing_500h,
-              CoconutTextField(
-                controller: row.destination,
-                focusNode: row.destinationFocus,
-                backgroundColor: colors.background,
-                padding: const EdgeInsets.only(left: 16, right: 0),
-                onChanged: (_) {},
-                maxLines: 1,
-                // Addresses and invoices must come through exactly as typed or pasted.
-                autocorrect: false,
-                enableSuggestions: false,
-                textInputType: TextInputType.visiblePassword,
-                clearButtonVisibility: CoconutTextFieldClearButtonVisibility.whenNotEmpty,
-                onClear: row.destination.clear,
-                suffixIconAsset: CommonActionIconPath.scan,
-                suffixIconColor: colors.primaryText,
-                suffixIconSize: 18,
-                onSuffixPressed: () => _scan(row),
-                placeholderText:
-                    _rows.length == 1 ? t.ark.send.destination_placeholder : t.send_screen.address_placeholder,
-                isError: problem != null,
-              ),
-              Expanded(
-                child: Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 10),
-                  child: Row(
-                    children: [
-                      Expanded(
-                        child: Text(
-                          note,
-                          maxLines: 2,
-                          overflow: TextOverflow.ellipsis,
-                          style: CoconutTypography.body3_12.setColor(
-                            problem != null ? colors.danger : colors.secondaryText,
-                          ),
-                        ),
-                      ),
-                      if (_rows.length > 1)
-                        CoconutUnderlinedButton(
-                          text: t.send_screen.delete,
-                          textStyle: CoconutTypography.body3_12.setColor(colors.secondaryText),
-                          padding: EdgeInsets.zero,
-                          onTap: _deleteCurrent,
-                        ),
-                    ],
+                  child: FittedBox(
+                    child: _buildAmount(row, exceedsAvailable: exceedsAvailable, arkAvailable: arkAvailable),
                   ),
                 ),
               ),
+              CoconutLayout.spacing_600h,
+              if (isMoveDestination) _buildMoveDestination() else ..._buildDestinationField(row, check),
             ],
           ),
         ),
@@ -537,24 +627,99 @@ class _SendRecipientScreenState extends State<SendRecipientScreen> {
     );
   }
 
-  /// The big amount, coloured as on the send screen.
-  Widget _buildAmount(_RecipientRow row, {required bool exceedsAvailable}) {
+  /// The address field and the note under it (what the destination is, or what's wrong).
+  List<Widget> _buildDestinationField(_RecipientRow row, SendRecipientCheck check) {
     final colors = context.coconutColors;
-    if (row.isMax) {
-      return Text(
-        t.ark.send.everything_left,
-        style: CoconutTypography.heading2_28_NumberBold.setColor(colors.secondaryText),
-      );
-    }
+    final request = check.request;
+    final problem = check.problem == SendRecipientProblem.needsAmount ? null : recipientProblemText(check);
+    final note = problem ?? (request == null ? '' : describePaymentRequest(request, _unit));
+    return [
+      CoconutTextField(
+        controller: row.destination,
+        focusNode: row.destinationFocus,
+        backgroundColor: colors.background,
+        padding: const EdgeInsets.only(left: 16, right: 0),
+        onChanged: (_) {},
+        maxLines: 1,
+        // Addresses and invoices must come through exactly as typed or pasted.
+        autocorrect: false,
+        enableSuggestions: false,
+        textInputType: TextInputType.visiblePassword,
+        clearButtonVisibility: CoconutTextFieldClearButtonVisibility.whenNotEmpty,
+        onClear: row.destination.clear,
+        suffixIconAsset: CommonActionIconPath.scan,
+        suffixIconColor: colors.primaryText,
+        suffixIconSize: 18,
+        onSuffixPressed: () => _scan(row),
+        placeholderText:
+            _rows.length == 1 && !_isMove ? t.ark.send.destination_placeholder : t.send_screen.address_placeholder,
+        isError: problem != null,
+      ),
+      Padding(
+        padding: const EdgeInsets.fromLTRB(10, 8, 10, 0),
+        child: Row(
+          children: [
+            Expanded(
+              child: Text(
+                note,
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                style: CoconutTypography.body3_12.setColor(problem != null ? colors.danger : colors.secondaryText),
+              ),
+            ),
+            if (_rows.length > 1)
+              CoconutUnderlinedButton(
+                text: t.send_screen.delete,
+                textStyle: CoconutTypography.body3_12.setColor(colors.secondaryText),
+                padding: EdgeInsets.zero,
+                onTap: _deleteCurrent,
+              ),
+          ],
+        ),
+      ),
+    ];
+  }
+
+  /// A move's destination, as step 2's recipient card but fixed (no edit).
+  Widget _buildMoveDestination() {
+    final colors = context.coconutColors;
+    final destination = _moveDestination;
+    return ArkCard(
+      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Text(t.ark.move.to, style: CoconutTypography.body3_12_Bold.setColor(colors.primaryText)),
+              CoconutLayout.spacing_200w,
+              ArkChip(moveEndpointText(widget.move!.to)),
+            ],
+          ),
+          CoconutLayout.spacing_200h,
+          Text(
+            destination == null ? t.ark.move.preparing : shortenMiddle(destination.address, head: 18, tail: 14),
+            style: CoconutTypography.body2_14_Number.setColor(colors.secondaryText),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// The big amount, coloured as on the send screen.
+  Widget _buildAmount(_RecipientRow row, {required bool exceedsAvailable, required int arkAvailable}) {
+    final colors = context.coconutColors;
+    final maxSats = row.maxSource == null ? null : _maxAmountSats(row, arkAvailable: arkAvailable);
+    final amount = maxSats != null ? SendAmountText.fromSats(maxSats, _unit) : row.amount;
     final Color color;
-    if (row.amount.isEmpty) {
+    if (amount.isEmpty) {
       color = colors.inputPlaceholder;
     } else if (exceedsAvailable) {
       color = colors.danger;
     } else {
       color = colors.primaryText;
     }
-    final number = row.amount.isEmpty ? '0' : row.amount.toBtcDisplayString();
+    final number = amount.isEmpty ? '0' : amount.toBtcDisplayString();
     final numberText = Text(number, style: CoconutTypography.heading2_28_NumberBold.setColor(color));
     final unitText = Text(_unit.symbol, style: CoconutTypography.heading4_18_Number.setColor(color));
     return Row(
@@ -565,35 +730,6 @@ class _SendRecipientScreenState extends State<SendRecipientScreen> {
           _unit.isPrefixSymbol
               ? [unitText, CoconutLayout.spacing_100w, numberText]
               : [numberText, CoconutLayout.spacing_100w, unitText],
-    );
-  }
-
-  /// "Send All" (the last recipient, on-chain) and "Add recipient", as the send screen's pills.
-  Widget _buildPills(_RecipientRow row, SendRecipientCheck check, {required bool isLast}) {
-    final language = AppLanguage.fromCode(context.read<PreferenceProvider>().language);
-    final sendAll = t.send_screen.input_maximum_amount;
-    final sendAllText =
-        row.isMax ? (language.hasEnglishWordOrder ? '${t.cancel} $sendAll' : '$sendAll ${t.cancel}') : sendAll;
-    return MediaQuery(
-      data: MediaQuery.of(context).copyWith(textScaler: const TextScaler.linear(1.0)),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          if (isLast && check.canUseMax) ...[
-            SendOptionPill(
-              label: sendAllText,
-              iconPath: FeatureSettingsIconPath.broom,
-              onPressed: () => _toggleMax(row),
-            ),
-            CoconutLayout.spacing_200w,
-          ],
-          SendOptionPill(
-            label: t.send_screen.add_recipient,
-            iconPath: CommonActionIconPath.plus,
-            onPressed: _addRecipient,
-          ),
-        ],
-      ),
     );
   }
 
@@ -610,6 +746,43 @@ class _SendRecipientScreenState extends State<SendRecipientScreen> {
             Text('${_page + 1} ', style: CoconutTypography.body3_12.setColor(colors.primaryText)),
             Text('/ ${_rows.length}', style: CoconutTypography.body3_12.setColor(colors.secondaryText)),
           ],
+        ),
+      ),
+    );
+  }
+
+  /// The send screen's first-run hint: a hand swiping left to the "Add Recipient" card.
+  Widget _buildSwipeGuide() {
+    final colors = context.coconutColors;
+    return AnimatedOpacity(
+      opacity: _isSwipeGuideVisible ? 1.0 : 0.0,
+      duration: const Duration(milliseconds: 500),
+      child: IgnorePointer(
+        child: Container(
+          height: _pageHeight,
+          width: double.infinity,
+          color: colors.background.withValues(alpha: 0.6),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Lottie.asset(
+                CommonLottiePath.swipeLeft,
+                width: 60,
+                height: 60,
+                delegates: LottieDelegates(
+                  values: [
+                    ValueDelegate.colorFilter(['**'], value: ColorFilter.mode(colors.primaryText, BlendMode.srcATop)),
+                  ],
+                ),
+              ),
+              CoconutLayout.spacing_200h,
+              Text(
+                t.send_screen.swipe_to_add_address,
+                textAlign: TextAlign.center,
+                style: CoconutTypography.body2_14.setColor(colors.primaryText),
+              ),
+            ],
+          ),
         ),
       ),
     );
@@ -643,7 +816,7 @@ class _SendRecipientScreenState extends State<SendRecipientScreen> {
     );
   }
 
-  /// The send screen's tooltips under the recipients: the batch total, and Send All.
+  /// The send screen's tooltips under the recipients: the batch total, and sending everything.
   Widget _buildTooltips(SendRecipientList check) {
     final total = check.recipients.fold<int>(0, (sum, recipient) => sum + (recipient.amountSats ?? 0));
     return Column(
@@ -659,7 +832,7 @@ class _SendRecipientScreenState extends State<SendRecipientScreen> {
           ),
           const SizedBox(height: 5),
         ],
-        if (check.maxLast)
+        if (check.maxLast || check.maxFromArk)
           _buildTooltip(iconPath: FeatureSettingsIconPath.broom, text: t.send_screen.tooltip_max_mode_text),
       ],
     );

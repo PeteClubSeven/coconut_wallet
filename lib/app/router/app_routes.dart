@@ -43,7 +43,6 @@ import 'package:coconut_wallet/screens/wallet_detail/utxo_detail_screen.dart';
 import 'package:coconut_wallet/screens/wallet_detail/utxo_list_screen.dart';
 import 'package:coconut_wallet/screens/wallet_detail/utxo_merge/utxo_merge_screen.dart';
 import 'package:coconut_wallet/screens/ark/ark_movement_detail_screen.dart';
-import 'package:coconut_wallet/screens/ark/ark_to_onchain_screen.dart';
 import 'package:coconut_wallet/screens/ark/vtxo_detail_screen.dart';
 import 'package:coconut_wallet/screens/ark/vtxo_overview_screen.dart';
 import 'package:coconut_wallet/screens/wallet_detail/utxo_organizer_screen.dart';
@@ -144,7 +143,6 @@ Map<String, WidgetBuilder> buildAppRoutes() {
             initialSatsFromP2P: args.initialSatsFromP2P,
             selectedUtxoList: args.selectedUtxoList,
             initialBitcoinUri: args.initialBitcoinUri,
-            boardIntoWalletId: args.boardIntoWalletId,
           ),
         ),
     AppRouteNames.sendRecipient:
@@ -155,6 +153,7 @@ Map<String, WidgetBuilder> buildAppRoutes() {
             sendEntryPoint: args.sendEntryPoint,
             initialInput: args.initialInput,
             initialAmountSats: args.initialAmountSats,
+            move: args.move,
           ),
         ),
     AppRouteNames.sendOptions:
@@ -164,7 +163,10 @@ Map<String, WidgetBuilder> buildAppRoutes() {
             id: args.id,
             recipients: args.recipients,
             maxLast: args.maxLast,
+            maxFromArk: args.maxFromArk,
             sendEntryPoint: args.sendEntryPoint,
+            move: args.move,
+            moveDestination: args.moveDestination,
           ),
         ),
     AppRouteNames.arkWallet:
@@ -176,11 +178,6 @@ Map<String, WidgetBuilder> buildAppRoutes() {
         (context) => _buildLoadingScreenWithArgs<VtxoDetailRouteArgs>(
           context,
           (args) => VtxoDetailScreen(id: args.id, vtxo: args.vtxo),
-        ),
-    AppRouteNames.arkToOnchain:
-        (context) => _buildLoadingScreenWithArgs<ArkToOnchainRouteArgs>(
-          context,
-          (args) => ArkToOnchainScreen(id: args.id, destinationWalletId: args.destinationWalletId),
         ),
     AppRouteNames.arkMovementDetail:
         (context) => _buildLoadingScreenWithArgs<ArkMovementDetailRouteArgs>(

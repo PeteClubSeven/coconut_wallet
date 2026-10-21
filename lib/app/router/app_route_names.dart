@@ -46,7 +46,6 @@ class AppRouteNames {
   static const String arkWallet = '/ark-wallet';
   static const String vtxoDetail = '/vtxo-detail';
   static const String arkMovementDetail = '/ark-movement-detail';
-  static const String arkToOnchain = '/ark-to-onchain';
   static const String sendRecipient = '/send-recipient';
   static const String sendOptions = '/send-options';
   static const String utxoSelection = '/utxo-selection';

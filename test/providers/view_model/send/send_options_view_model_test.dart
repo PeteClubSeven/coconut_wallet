@@ -1,12 +1,15 @@
 import 'dart:async';
 
 import 'package:coconut_lib/coconut_lib.dart';
+import 'package:coconut_wallet/model/ark/ark_board.dart';
 import 'package:coconut_wallet/model/ark/ark_payment.dart';
+import 'package:coconut_wallet/model/ark/move.dart';
 import 'package:coconut_wallet/model/utxo/utxo_state.dart';
 import 'package:coconut_wallet/providers/send_info_provider.dart';
 import 'package:coconut_wallet/providers/view_model/send/send_options_view_model.dart';
 import 'package:coconut_wallet/services/model/response/recommended_fee.dart';
 import 'package:coconut_wallet/utils/payment_request_parser.dart';
+import 'package:coconut_wallet/utils/send_recipients.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import '../../../mock/wallet_mock.dart';
@@ -48,6 +51,12 @@ class _FakeArk implements SendArkAccess {
     return Future.value(fees[rail]!);
   }
 
+  /// What sending everything to a Bitcoin address costs (an offboard).
+  int everythingOnchainFee = 3000;
+
+  @override
+  Future<int> estimateEverythingOnchainFee(String address) async => everythingOnchainFee;
+
   @override
   Future<bool> validateAddress(String address) async => acceptsAddress;
 }
@@ -80,6 +89,9 @@ void main() {
   SendOptionsViewModel createMany(
     List<(String, int?)> recipients, {
     bool maxLast = false,
+    bool maxFromArk = false,
+    SendFunding funding = SendFunding.any,
+    MoveDestination? moveDestination,
     List<UtxoState>? walletUtxos,
     RecommendedFee? fees,
   }) => SendOptionsViewModel(
@@ -88,6 +100,9 @@ void main() {
         SendRecipientInput(PaymentRequest.parse(input, NetworkType.regtest), amount),
     ],
     maxLast: maxLast,
+    maxFromArk: maxFromArk,
+    funding: funding,
+    moveDestination: moveDestination,
     wallet: WalletMock.createSingleSigWalletItem(),
     utxos: walletUtxos ?? utxos,
     changeDerivationPath: "m/84'/1'/0'/1/0",
@@ -269,5 +284,71 @@ void main() {
     expect(sendInfo.isMultisig, isFalse);
     final payments = sendInfo.transaction!.outputs.where((output) => output.isChangeOutput != true);
     expect(payments.map((output) => output.amount).toList()..sort(), [30000, 50000]);
+  });
+
+  test('everything in Ark pays an Ark address in Ark, and a Bitcoin address with an offboard', () async {
+    final toArk = createMany([('bitcoin:?ark=$_ark', null)], maxFromArk: true);
+    expect(kinds(toArk), [SendOptionKind.ark]);
+    await settle();
+    expect(toArk.amountSats, 100000); // the Ark payment's fee is 0
+    expect(toArk.arkPaymentAmountSats, 100000);
+
+    final toBitcoin = createMany([('bitcoin:$_bitcoin?ark=$_ark&lightning=$_invoice', null)], maxFromArk: true);
+    expect(kinds(toBitcoin), [SendOptionKind.ark], reason: 'everything in Ark to an Ark address stays in Ark');
+
+    final offboard = createMany([(_bitcoin, null)], maxFromArk: true);
+    expect(kinds(offboard), [SendOptionKind.onchainViaArk]);
+    await settle();
+    expect(offboard.amountSats, 100000 - 3000);
+    expect(offboard.statusOf(offboard.options.single).isReady, isTrue);
+    expect(offboard.arkPaymentAmountSats, isNull, reason: 'bark offboards everything itself');
+  });
+
+  test('a move pays only from its source', () async {
+    final fromOnchain = createMany([('bitcoin:$_bitcoin?ark=$_ark', 20000)], funding: SendFunding.onchain);
+    expect(kinds(fromOnchain), [SendOptionKind.onchain]);
+
+    final fromArk = createMany([(_bitcoin, 20000)], funding: SendFunding.ark);
+    expect(kinds(fromArk), [SendOptionKind.onchainViaArk]);
+  });
+
+  test('the fee can come out of the amount', () async {
+    final vm = create(_bitcoin, amount: 50000, fees: RecommendedFee(1, 1, 1, 1, 1));
+    await vm.refreshRecommendedFees();
+    expect(vm.amountSats, 50000);
+    vm.setFeeSubtracted(true);
+    final fee = vm.onchainFeeSats!;
+    expect(vm.amountSats, 50000 - fee);
+    vm.saveOnchainForConfirm(SendEntryPoint.walletDetail);
+    final payment = sendInfo.transaction!.outputs.firstWhere((output) => output.isChangeOutput != true);
+    expect(payment.amount, 50000 - fee);
+  });
+
+  test('a board keeps to the Ark server\'s limits and travels with the transaction', () async {
+    const funding = ArkBoardFunding(address: _otherBitcoin, expiryHeight: 1000, keypairIndex: 0);
+    const destination = MoveDestination(
+      address: _otherBitcoin,
+      board: ArkBoardIntent(walletId: 1, funding: funding),
+      boardTerms: ArkBoardTerms(minAmountSats: 100000, maxAmountSats: null, requiredConfirmations: 2),
+    );
+    final small = createMany(
+      [(_otherBitcoin, 50000)],
+      funding: SendFunding.onchain,
+      moveDestination: destination,
+      fees: RecommendedFee(1, 1, 1, 1, 1),
+    );
+    await small.refreshRecommendedFees();
+    expect(small.statusOf(small.onchainOption!).problem, SendOptionProblem.boardRefused);
+
+    final ok = createMany(
+      [(_otherBitcoin, 150000)],
+      funding: SendFunding.onchain,
+      moveDestination: destination,
+      fees: RecommendedFee(1, 1, 1, 1, 1),
+    );
+    await ok.refreshRecommendedFees();
+    expect(ok.statusOf(ok.onchainOption!).isReady, isTrue);
+    ok.saveOnchainForConfirm(SendEntryPoint.walletDetail);
+    expect(sendInfo.arkBoard?.funding.address, _otherBitcoin);
   });
 }

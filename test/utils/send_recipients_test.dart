@@ -13,8 +13,18 @@ const _invoice =
 void main() {
   setUpAll(() => NetworkType.setNetworkType(NetworkType.regtest));
 
-  SendRecipientList check(List<SendRecipientRow> rows, {int onchain = 1000000, int ark = 100000}) =>
-      SendRecipientList(rows, network: NetworkType.regtest, onchainAvailableSats: onchain, arkAvailableSats: ark);
+  SendRecipientList check(
+    List<SendRecipientRow> rows, {
+    int onchain = 1000000,
+    int ark = 100000,
+    SendFunding funding = SendFunding.any,
+  }) => SendRecipientList(
+    rows,
+    network: NetworkType.regtest,
+    onchainAvailableSats: onchain,
+    arkAvailableSats: ark,
+    funding: funding,
+  );
 
   test('one recipient can be anything payable', () {
     for (final input in [_bitcoin, _ark, _invoice, 'satoshi@example.com', 'bitcoin:?ark=$_ark&amount=0.0001']) {
@@ -30,28 +40,50 @@ void main() {
     final invoice = check([const SendRecipientRow(_invoice, enteredAmountSats: 1)]).checks.single;
     expect(invoice.fixedAmountSats, 30000);
     expect(invoice.amountSats, 30000);
-    expect(invoice.canUseMax, isFalse);
+    expect(invoice.canUseOnchainMax, isFalse);
+    expect(invoice.canUseArkMax, isFalse);
 
     final code = check([const SendRecipientRow('bitcoin:$_bitcoin?amount=0.0002')]).checks.single;
     expect(code.amountSats, 20000);
     expect(code.isValid, isTrue);
   });
 
-  test('an amount is needed unless it is fixed or Max', () {
+  test('an amount is needed unless it is fixed or everything from a balance', () {
     final missing = check([const SendRecipientRow(_bitcoin)]);
     expect(missing.checks.single.problem, SendRecipientProblem.needsAmount);
     expect(missing.canContinue, isFalse);
 
-    final max = check([const SendRecipientRow(_bitcoin, isMax: true)]);
+    final max = check([const SendRecipientRow(_bitcoin, maxSource: SendMaxSource.onchain)]);
     expect(max.canContinue, isTrue);
     expect(max.maxLast, isTrue);
     expect(max.checks.single.amountSats, isNull);
 
-    // Max is on-chain only, so it isn't honoured for an Ark address.
-    final arkMax = check([const SendRecipientRow(_ark, isMax: true)]);
-    expect(arkMax.checks.single.canUseMax, isFalse);
-    expect(arkMax.maxLast, isFalse);
-    expect(arkMax.checks.single.problem, SendRecipientProblem.needsAmount);
+    // On-chain funds can't pay an Ark address, so everything on-chain isn't honoured for one…
+    final onchainMax = check([const SendRecipientRow(_ark, maxSource: SendMaxSource.onchain)]);
+    expect(onchainMax.checks.single.canUseOnchainMax, isFalse);
+    expect(onchainMax.maxLast, isFalse);
+    expect(onchainMax.checks.single.problem, SendRecipientProblem.needsAmount);
+
+    // …but everything in Ark is, as for a Bitcoin address.
+    for (final input in [_ark, _bitcoin]) {
+      final arkMax = check([SendRecipientRow(input, maxSource: SendMaxSource.ark)]);
+      expect(arkMax.maxFromArk, isTrue, reason: input);
+      expect(arkMax.canContinue, isTrue, reason: input);
+    }
+    expect(check([const SendRecipientRow(_invoice, maxSource: SendMaxSource.ark)]).maxFromArk, isFalse);
+  });
+
+  test('a move pays only from its source balance', () {
+    final fromOnchain = check([const SendRecipientRow(_ark, enteredAmountSats: 1000)], funding: SendFunding.onchain);
+    expect(fromOnchain.checks.single.problem, SendRecipientProblem.onchainOnly);
+    final arkMax = check([
+      const SendRecipientRow(_bitcoin, maxSource: SendMaxSource.ark),
+    ], funding: SendFunding.onchain);
+    expect(arkMax.maxFromArk, isFalse);
+
+    final fromArk = check([const SendRecipientRow(_bitcoin, enteredAmountSats: 150000)], funding: SendFunding.ark);
+    expect(fromArk.exceedsAvailable, isTrue, reason: 'only the Ark balance (100000) pays');
+    expect(fromArk.checks.single.canUseOnchainMax, isFalse);
   });
 
   test('several recipients need on-chain addresses', () {
@@ -73,11 +105,12 @@ void main() {
       const SendRecipientRow(_bitcoin, enteredAmountSats: 10000),
       const SendRecipientRow(''),
       const SendRecipientRow('bitcoin:$_bitcoin?amount=0.0001'),
-      const SendRecipientRow(_otherBitcoin, isMax: true),
+      const SendRecipientRow(_otherBitcoin, maxSource: SendMaxSource.onchain),
     ]);
     expect(list.checks[1].isEmpty, isTrue);
     expect(list.checks[2].problem, SendRecipientProblem.duplicate);
-    expect(list.checks[3].canUseMax, isTrue);
+    expect(list.checks[3].canUseOnchainMax, isTrue);
+    expect(list.checks[3].canUseArkMax, isFalse, reason: 'several recipients are paid on-chain');
     expect(list.recipients.length, 3);
 
     final withEmpty = check([const SendRecipientRow(_bitcoin, enteredAmountSats: 10000), const SendRecipientRow('')]);
@@ -85,7 +118,7 @@ void main() {
     expect(withEmpty.canContinue, isFalse);
 
     final maxNotLast = check([
-      const SendRecipientRow(_bitcoin, isMax: true),
+      const SendRecipientRow(_bitcoin, maxSource: SendMaxSource.onchain),
       const SendRecipientRow(_otherBitcoin, enteredAmountSats: 10000),
     ]);
     expect(maxNotLast.checks.first.problem, SendRecipientProblem.needsAmount);

@@ -1,3 +1,4 @@
+import 'dart:math' as math;
 import 'package:coconut_wallet/screens/wallet_detail/move_to_vault_bottom_sheets.dart';
 import 'package:coconut_wallet/app/router/app_route_names.dart';
 import 'package:coconut_wallet/app/router/route_args.dart';
@@ -31,6 +32,7 @@ import 'package:coconut_wallet/providers/wallet_provider.dart';
 import 'package:coconut_wallet/screens/ark/ark_movement_detail_screen.dart';
 import 'package:coconut_wallet/screens/ark/ark_unlock_flow.dart';
 import 'package:coconut_wallet/screens/settings/app_settings/app_settings_screen.dart';
+import 'package:coconut_wallet/model/ark/move.dart';
 import 'package:coconut_wallet/screens/wallet_detail/move_sheet.dart';
 import 'package:coconut_wallet/screens/wallet_detail/wallet_detail_faucet_request_bottom_sheet.dart';
 import 'package:coconut_wallet/services/analytics_service.dart';
@@ -809,65 +811,34 @@ class _WalletDetailScreenState extends State<WalletDetailScreen> with TickerProv
       await _onMoveToVaultPressed();
       return;
     }
-    final selection = await CommonBottomSheets.showBottomSheet<MoveSelection>(
+    // Tall enough for the longer step (where from, or where to plus "create a vault").
+    final rows = [options.all.length, options.all.length - 1 + (options.vaults.isEmpty ? 1 : 0)].reduce(math.max);
+    final height = MediaQuery.sizeOf(context).height;
+    final selection = await CommonBottomSheets.showCustomHeightBottomSheet<MoveSelection>(
       context: context,
-      title: t.ark.move.title,
       screenName: 'wallet_detail/move',
-      showCloseButton: true,
+      heightRatio: ((160 + 96 * rows + 100) / height).clamp(0.4, 0.9),
+      enableDragToResize: false,
       backgroundColor: context.coconutColors.surfaceBottomSheet,
-      child: Flexible(child: MoveSheet(options: options, currentUnit: _viewModel.currentUnit)),
+      childBuilder:
+          (scrollController) =>
+              MoveSheet(options: options, currentUnit: _viewModel.currentUnit, scrollController: scrollController),
     );
     if (!mounted || selection == null) return;
     _openMove(selection);
   }
 
+  /// Every move runs on Send's two steps in move mode: the destination is fixed, the source pays.
   void _openMove(MoveSelection selection) {
-    final to = selection.to;
-    final from = selection.from;
-    switch ((from.kind, to.kind)) {
-      case (MoveEndpointKind.onchain, MoveEndpointKind.vault):
-        _openSendToVault(to.walletId);
-      case (MoveEndpointKind.onchain, MoveEndpointKind.ark):
-        Navigator.pushNamed(
-          context,
-          AppRouteNames.send,
-          arguments: SendRouteArgs(
-            id: widget.id,
-            sendEntryPoint: SendEntryPoint.walletDetail,
-            boardIntoWalletId: widget.id,
-          ),
-        );
-      case (MoveEndpointKind.ark, _):
-        Navigator.pushNamed(
-          context,
-          AppRouteNames.arkToOnchain,
-          arguments: ArkToOnchainRouteArgs(id: widget.id, destinationWalletId: to.walletId),
-        );
-      case (MoveEndpointKind.vault, MoveEndpointKind.onchain):
-        // The vault's own send flow (signed with Coconut Vault), receiving into this wallet.
-        Navigator.pushNamed(
-          context,
-          AppRouteNames.send,
-          arguments: SendRouteArgs(
-            id: from.walletId,
-            sendEntryPoint: SendEntryPoint.walletDetail,
-            isMoveToVault: true,
-            receivingVaultWalletId: widget.id,
-          ),
-        );
-      case (MoveEndpointKind.vault, MoveEndpointKind.ark):
-        Navigator.pushNamed(
-          context,
-          AppRouteNames.send,
-          arguments: SendRouteArgs(
-            id: from.walletId,
-            sendEntryPoint: SendEntryPoint.walletDetail,
-            boardIntoWalletId: widget.id,
-          ),
-        );
-      default:
-        break;
-    }
+    Navigator.pushNamed(
+      context,
+      AppRouteNames.sendRecipient,
+      arguments: SendRecipientRouteArgs(
+        id: selection.from.kind == MoveEndpointKind.vault ? selection.from.walletId : widget.id,
+        sendEntryPoint: SendEntryPoint.walletDetail,
+        move: selection,
+      ),
+    );
   }
 
   Future<void> _onMoveToVaultPressed() async {

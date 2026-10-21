@@ -1,5 +1,4 @@
 import 'package:coconut_lib/coconut_lib.dart';
-import 'package:coconut_wallet/model/ark/ark_board.dart';
 import 'package:coconut_wallet/constants/dust_constants.dart';
 import 'package:coconut_wallet/core/transaction/transaction_builder.dart';
 import 'package:coconut_wallet/enums/fiat_enums.dart';
@@ -273,39 +272,7 @@ class SendViewModel extends ChangeNotifier with FeeRateMixin {
   List<TransactionDraft>? get drafts => _drafts;
   bool? get hasDrafts => _drafts?.isNotEmpty;
   bool get isSaved => _transactionDraftId != null;
-  // A board's funding address and server cosignature can't wait in a draft.
-  bool get canUseTransactionDrafts =>
-      selectedWalletItem != null && !selectedWalletItem!.hasLocalKey && _arkBoard == null;
-
-  ArkBoardIntent? _arkBoard;
-  ArkBoardTerms? _arkBoardTerms;
-  ArkBoardIntent? get arkBoard => _arkBoard;
-  ArkBoardTerms? get arkBoardTerms => _arkBoardTerms;
-
-  /// Makes this send a board into an Ark wallet: the recipient is [board]'s funding address, and
-  /// the amount it receives must be within the server's [terms].
-  void setArkBoard(ArkBoardIntent board, ArkBoardTerms terms) {
-    _arkBoard = board;
-    _arkBoardTerms = terms;
-    _updateFinalErrorMessage();
-  }
-
-  /// What the built transaction pays to [address], or null before a successful build. In Max
-  /// mode and with the fee taken from the amount, this differs from the entered amount.
-  int? builtAmountTo(String address) {
-    final transaction = _txBuildResult?.transaction;
-    if (transaction == null) return null;
-    final normalized = normalizeAddress(address);
-    var total = 0;
-    var found = false;
-    for (final output in transaction.outputs) {
-      if (output.isChangeOutput == true) continue;
-      if (normalizeAddress(output.getAddress()) != normalized) continue;
-      total += output.amount;
-      found = true;
-    }
-    return found ? total : null;
-  }
+  bool get canUseTransactionDrafts => selectedWalletItem != null && !selectedWalletItem!.hasLocalKey;
 
   bool isMaxModeLastIndex(int index) {
     return _isMaxMode && index == lastIndex;
@@ -750,9 +717,6 @@ class SendViewModel extends ChangeNotifier with FeeRateMixin {
     } else if (_txBuildResult?.exception != null && _recipientList.every((r) => r.isInputValid)) {
       // 모든 수신자 카드 amount, address가 유효한 경우에만 메시지 보여주기
       message = _txBuildResult!.exception.toString();
-    } else if (_arkBoard != null && _arkBoardTerms != null) {
-      final boardAmount = builtAmountTo(_arkBoard!.funding.address);
-      if (boardAmount != null) message = _arkBoardTerms!.check(boardAmount) ?? '';
     }
 
     _finalErrorMessage = message;
@@ -1091,7 +1055,6 @@ class SendViewModel extends ChangeNotifier with FeeRateMixin {
     _sendInfoProvider.setFeeRate(double.parse(_feeRateText));
     _sendInfoProvider.setIsMaxMode(_isMaxMode);
     _sendInfoProvider.setUnsignedDraftId(canUseTransactionDrafts ? _transactionDraftId : null);
-    _sendInfoProvider.setArkBoard(_arkBoard);
   }
 
   void clearSendInfo() {
