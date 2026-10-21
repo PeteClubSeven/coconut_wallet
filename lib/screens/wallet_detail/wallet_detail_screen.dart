@@ -811,7 +811,7 @@ class _WalletDetailScreenState extends State<WalletDetailScreen> with TickerProv
     }
     final selection = await CommonBottomSheets.showBottomSheet<MoveSelection>(
       context: context,
-      title: 'Move',
+      title: t.ark.move.title,
       screenName: 'wallet_detail/move',
       showCloseButton: true,
       backgroundColor: context.coconutColors.surfaceBottomSheet,

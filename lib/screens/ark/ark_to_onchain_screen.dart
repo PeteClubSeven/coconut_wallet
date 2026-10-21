@@ -1,6 +1,8 @@
 import 'dart:async';
 
-import 'package:coconut_design_system/coconut_design_system.dart' hide CoconutAppBar, CoconutPopup, CoconutToast;
+import 'package:coconut_design_system/coconut_design_system.dart'
+    hide CoconutAppBar, CoconutPopup, CoconutToast, CoconutOptionPicker;
+import 'package:coconut_wallet/constants/icon_path.dart';
 import 'package:coconut_wallet/design_system/context/coconut_theme_context_extension.dart';
 import 'package:coconut_wallet/enums/fiat_enums.dart';
 import 'package:coconut_wallet/localization/strings.g.dart';
@@ -12,15 +14,18 @@ import 'package:coconut_wallet/screens/ark/ark_unlock_flow.dart';
 import 'package:coconut_wallet/screens/common/bip21_amount_bottom_sheet.dart';
 import 'package:coconut_wallet/screens/common/flutter_hot_wallet_authenticator.dart';
 import 'package:coconut_wallet/ui/coconut/coconut_app_bar.dart';
+import 'package:coconut_wallet/ui/coconut/coconut_option_picker.dart';
 import 'package:coconut_wallet/ui/coconut/coconut_overlays.dart';
 import 'package:coconut_wallet/utils/logger.dart';
-import 'package:coconut_wallet/widgets/common/dialogs/dialog.dart';
+import 'package:coconut_wallet/widgets/common/buttons/fixed_bottom_button.dart';
+import 'package:coconut_wallet/widgets/features/ark/ark_texts.dart';
+import 'package:coconut_wallet/widgets/features/ark/ark_ui.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 /// Moves a hot wallet's Ark funds on-chain: to the wallet's own next receive address, or to
 /// another wallet's (a vault). All of it is an offboard; an amount is an on-chain payment from
-/// Ark with the rest staying there. Strings are not localized yet (proof of concept).
+/// Ark with the rest staying there. Laid out like the UTXO merge screen.
 class ArkToOnchainScreen extends StatefulWidget {
   const ArkToOnchainScreen({super.key, required this.id, required this.destinationWalletId});
 
@@ -39,6 +44,7 @@ class _ArkToOnchainScreenState extends State<ArkToOnchainScreen> {
   late final String _walletName;
   late final String _destinationName;
   late final String _address;
+  late BitcoinUnit _unit;
 
   /// Null means everything (an offboard).
   int? _amountSats;
@@ -56,6 +62,7 @@ class _ArkToOnchainScreenState extends State<ArkToOnchainScreen> {
     super.initState();
     final walletProvider = context.read<WalletProvider>();
     _arkProvider = context.read<ArkProvider>();
+    _unit = context.read<PreferenceProvider>().currentUnit;
     _walletName = walletProvider.getWalletById(widget.id).name;
     _destinationName = walletProvider.getWalletById(widget.destinationWalletId).name;
     _address = walletProvider.getReceiveAddress(widget.destinationWalletId).address;
@@ -83,14 +90,15 @@ class _ArkToOnchainScreenState extends State<ArkToOnchainScreen> {
   int? get _received => _amountSats ?? (_feeSats == null ? null : _spendable - _feeSats!);
 
   String? get _problem {
-    if (_spendable <= 0) return 'There is nothing to move in Ark';
+    if (_spendable <= 0) return t.ark.move.nothing_in_ark;
     final received = _received;
-    if (received != null && received <= ArkBoardTerms.dustLimitSats) return 'The amount is too small to send on-chain';
+    if (received != null && received <= ArkBoardTerms.dustLimitSats) return t.ark.move.too_small;
     final totalOut = _totalOut;
-    if (totalOut != null && totalOut > _spendable) return 'Not enough in Ark to cover the amount and fee';
+    if (totalOut != null && totalOut > _spendable) return t.ark.move.not_enough;
     return null;
   }
 
+  // The fee estimate waits for the amount to settle: it goes through bark under the wallet lock.
   void _scheduleEstimate() {
     _estimateTimer?.cancel();
     final amount = _amountSats;
@@ -107,7 +115,7 @@ class _ArkToOnchainScreenState extends State<ArkToOnchainScreen> {
           _feeFor = amount;
         });
       } catch (error) {
-        if (mounted && amount == _amountSats) setState(() => _error = 'Could not estimate the fee: $error');
+        if (mounted && amount == _amountSats) setState(() => _error = t.ark.move.estimate_failed(error: '$error'));
       } finally {
         if (mounted && amount == _amountSats) setState(() => _isEstimating = false);
       }
@@ -117,7 +125,7 @@ class _ArkToOnchainScreenState extends State<ArkToOnchainScreen> {
   Future<void> _editAmount() async {
     final result = await Bip21AmountBottomSheet.show(
       context: context,
-      currentUnit: context.read<PreferenceProvider>().currentUnit,
+      currentUnit: _unit,
       initialAmountSats: _amountSats,
       screenName: 'ark_to_onchain/amount',
     );
@@ -129,7 +137,7 @@ class _ArkToOnchainScreenState extends State<ArkToOnchainScreen> {
     _scheduleEstimate();
   }
 
-  void _useMax() {
+  void _useEverything() {
     if (_amountSats == null) return;
     setState(() {
       _amountSats = null;
@@ -138,144 +146,126 @@ class _ArkToOnchainScreenState extends State<ArkToOnchainScreen> {
     _scheduleEstimate();
   }
 
-  Future<void> _move(BitcoinUnit unit) async {
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder:
-          (dialogContext) => CoconutPopup(
-            languageCode: context.read<PreferenceProvider>().language,
-            title: 'Move ${_amountSats == null ? 'all Ark funds' : _amount(unit, _amountSats!)}?',
-            description:
-                'To $_destinationName on-chain. The Ark server charges ${_amount(unit, _feeSats ?? 0)}, '
-                '${_amountSats == null ? 'taken out of the amount' : 'on top of the amount'}.',
-            leftButtonText: t.cancel,
-            rightButtonText: t.confirm,
-            onTapLeft: () => Navigator.pop(dialogContext, false),
-            onTapRight: () => Navigator.pop(dialogContext, true),
-          ),
+  Future<void> _move() async {
+    final fee = formatSats(_unit, _feeSats ?? 0);
+    final confirmed = await confirmArkAction(
+      context,
+      title:
+          _amountSats == null
+              ? t.ark.move.confirm_title_all
+              : t.ark.move.confirm_title(amount: formatSats(_unit, _amountSats!)),
+      description:
+          _amountSats == null
+              ? t.ark.move.confirm_fee_from_amount(destination: _destinationName, fee: fee)
+              : t.ark.move.confirm_fee_on_top(destination: _destinationName, fee: fee),
     );
-    if (confirmed != true || !mounted) return;
+    if (!confirmed || !mounted) return;
     if (!await FlutterHotWalletAuthenticator(context).authenticate() || !mounted) return;
     setState(() => _isMoving = true);
     try {
       final txid = await _arkProvider.moveOnchain(widget.id, _address, amountSats: _amountSats);
       Logger.log('ArkToOnchainScreen: moved Ark funds on-chain in $txid');
       if (!mounted) return;
-      CoconutToast.showBottomToast(context: context, text: 'Moved to $_destinationName');
+      CoconutToast.showBottomToast(context: context, text: t.ark.move.moved(name: _destinationName));
       Navigator.pop(context);
     } on ArkMovePendingException {
       if (!mounted) return;
-      CoconutToast.showBottomToast(context: context, text: 'Accepted: Ark finishes the move on a later sync');
+      CoconutToast.showBottomToast(context: context, text: t.ark.move.accepted_later);
       Navigator.pop(context);
     } catch (error) {
       if (!mounted) return;
       setState(() => _isMoving = false);
-      await showInfoDialog(context, context.read<PreferenceProvider>().language, 'Move failed', '$error');
+      await showArkError(context, t.ark.move.failed, '$error');
     }
   }
 
-  static String _amount(BitcoinUnit unit, int sats) =>
-      unit.displayBitcoinAmount(sats, withUnit: true, shouldCheckZero: true, defaultWhenZero: '0 ${unit.symbol}');
-
   @override
   Widget build(BuildContext context) {
-    final unit = context.select<PreferenceProvider, BitcoinUnit>((provider) => provider.currentUnit);
+    final colors = context.coconutColors;
     return Consumer<ArkProvider>(
       builder: (context, arkProvider, _) {
         final feeKnown = _feeSats != null && _feeFor == _amountSats;
-        final problem = _problem;
-        final canMove = feeKnown && problem == null && _error == null && !_isMoving && !_isEstimating;
+        final problem = _error ?? _problem;
+        final canMove = feeKnown && problem == null && !_isMoving && !_isEstimating;
+        const dash = '-';
         return Scaffold(
-          backgroundColor: context.coconutColors.background,
+          backgroundColor: colors.background,
           appBar: CoconutAppBar.build(
             context: context,
-            title: _toOwnWallet ? 'Move to on-chain' : 'Move to $_destinationName',
-            backgroundColor: context.coconutColors.background,
+            title: _toOwnWallet ? t.ark.move.to_onchain_title : t.ark.move.to_wallet_title(name: _destinationName),
+            backgroundColor: colors.background,
           ),
           body: SafeArea(
-            child: ListView(
-              padding: const EdgeInsets.fromLTRB(16, 8, 16, 120),
+            child: Stack(
               children: [
-                _card([
-                  _row('From', 'Ark · $_walletName'),
-                  _row('Available in Ark', _amount(unit, _spendable)),
-                  _row('To', _toOwnWallet ? 'On-chain · $_walletName' : _destinationName),
-                  _row('Address', '${_address.substring(0, 12)}…${_address.substring(_address.length - 8)}'),
-                ]),
-                CoconutLayout.spacing_400h,
-                _card([
-                  Row(
-                    children: [
-                      Expanded(
-                        child: Text(
-                          _amountSats == null ? 'Everything' : _amount(unit, _amountSats!),
-                          style: CoconutTypography.heading4_18_NumberBold.setColor(context.coconutColors.primaryText),
-                        ),
+                ListView(
+                  padding: const EdgeInsets.fromLTRB(16, 32, 16, 160),
+                  children: [
+                    Text(t.ark.move.question, style: CoconutTypography.heading4_18_Bold.setColor(colors.primaryText)),
+                    CoconutLayout.spacing_500h,
+                    CoconutOptionPicker(
+                      label: t.ark.move.amount,
+                      text: _amountSats == null ? t.ark.move.everything : formatSats(_unit, _amountSats!),
+                      dividerColor: colors.inputPlaceholder,
+                      onTap: _editAmount,
+                    ),
+                    CoconutLayout.spacing_200h,
+                    Align(
+                      alignment: Alignment.centerLeft,
+                      child: SendOptionPill(
+                        label: t.send_screen.input_maximum_amount,
+                        iconPath: FeatureSettingsIconPath.broom,
+                        isSelected: _amountSats == null,
+                        onPressed: _useEverything,
                       ),
-                      _chip('Max', selected: _amountSats == null, onTap: _useMax),
-                      CoconutLayout.spacing_200w,
-                      _chip('Amount', selected: _amountSats != null, onTap: _editAmount),
-                    ],
-                  ),
-                  CoconutLayout.spacing_300h,
-                  _row('Ark fee', feeKnown ? _amount(unit, _feeSats!) : (_isEstimating ? 'Estimating…' : '—')),
-                  _row('Leaves Ark', feeKnown && _totalOut != null ? _amount(unit, _totalOut!) : '—'),
-                  _row('Arrives on-chain', feeKnown && _received != null ? _amount(unit, _received!) : '—'),
-                ]),
-                if (problem != null || _error != null) ...[
-                  CoconutLayout.spacing_300h,
-                  Text(_error ?? problem!, style: CoconutTypography.body3_12.setColor(context.coconutColors.danger)),
-                ],
+                    ),
+                    CoconutLayout.spacing_500h,
+                    CoconutOptionPicker(
+                      label: t.ark.move.destination,
+                      text:
+                          '${_toOwnWallet ? t.ark.move.onchain(name: _walletName) : _destinationName} · '
+                          '${shortenMiddle(_address, head: 10, tail: 8)}',
+                      dividerColor: colors.inputPlaceholder,
+                      enabled: false,
+                      onTap: () {},
+                    ),
+                    CoconutLayout.spacing_500h,
+                    ArkCard(
+                      child: Column(
+                        children: [
+                          ArkInfoRow(label: t.ark.send.available_ark, value: formatSats(_unit, _spendable)),
+                          ArkInfoRow(
+                            label: t.ark.move.ark_fee,
+                            value:
+                                feeKnown
+                                    ? formatSats(_unit, _feeSats!)
+                                    : (_isEstimating ? t.ark.send.estimating : dash),
+                          ),
+                          ArkInfoRow(
+                            label: t.ark.move.leaves_ark,
+                            value: feeKnown && _totalOut != null ? formatSats(_unit, _totalOut!) : dash,
+                          ),
+                          ArkInfoRow(
+                            label: t.ark.move.arrives_onchain,
+                            value: feeKnown && _received != null ? formatSats(_unit, _received!) : dash,
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+                FixedBottomButton(
+                  onButtonClicked: _move,
+                  text: _isMoving ? t.ark.move.moving : t.ark.move.move,
+                  isActive: canMove,
+                  subWidget:
+                      problem == null ? null : Text(problem, style: CoconutTypography.body3_12.setColor(colors.danger)),
+                ),
               ],
-            ),
-          ),
-          bottomNavigationBar: SafeArea(
-            child: Padding(
-              padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
-              child: CoconutButton(
-                text: _isMoving ? 'Moving…' : 'Move',
-                isActive: canMove,
-                onPressed: canMove ? () => _move(unit) : () {},
-                height: 52,
-                backgroundColor: context.coconutColors.primary,
-                foregroundColor: context.coconutColors.background,
-              ),
             ),
           ),
         );
       },
     );
   }
-
-  Widget _card(List<Widget> children) => Container(
-    padding: const EdgeInsets.all(20),
-    decoration: BoxDecoration(
-      color: context.coconutColors.surface,
-      borderRadius: BorderRadius.circular(CoconutStyles.radius_400),
-    ),
-    child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: children),
-  );
-
-  Widget _row(String label, String value) => Padding(
-    padding: const EdgeInsets.symmetric(vertical: 3),
-    child: Row(
-      children: [
-        Expanded(child: Text(label, style: CoconutTypography.body3_12.setColor(context.coconutColors.secondaryText))),
-        Text(value, style: CoconutTypography.body3_12_Number.setColor(context.coconutColors.primaryText)),
-      ],
-    ),
-  );
-
-  Widget _chip(String text, {required bool selected, required VoidCallback onTap}) => GestureDetector(
-    onTap: onTap,
-    child: Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-      decoration: BoxDecoration(
-        color: selected ? context.coconutColors.surfaceMuted : Colors.transparent,
-        border: Border.all(color: context.coconutColors.surfaceMuted),
-        borderRadius: BorderRadius.circular(CoconutStyles.radius_100),
-      ),
-      child: Text(text, style: CoconutTypography.body3_12.setColor(context.coconutColors.primaryText)),
-    ),
-  );
 }

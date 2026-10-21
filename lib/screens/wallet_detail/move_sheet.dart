@@ -2,9 +2,12 @@ import 'package:coconut_design_system/coconut_design_system.dart';
 import 'package:coconut_lib/coconut_lib.dart';
 import 'package:coconut_wallet/design_system/context/coconut_theme_context_extension.dart';
 import 'package:coconut_wallet/enums/fiat_enums.dart';
+import 'package:coconut_wallet/localization/strings.g.dart';
 import 'package:coconut_wallet/model/wallet/wallet_item_base.dart';
-import 'package:flutter/material.dart';
+import 'package:coconut_wallet/widgets/common/buttons/fixed_bottom_button.dart';
+import 'package:coconut_wallet/widgets/common/overlays/common_bottom_sheets.dart';
 import 'package:coconut_wallet/widgets/features/ark/ark_texts.dart';
+import 'package:flutter/material.dart';
 
 enum MoveEndpointKind { onchain, ark, vault }
 
@@ -137,12 +140,12 @@ class _MoveSheetState extends State<MoveSheet> {
     return SafeArea(
       top: false,
       child: SingleChildScrollView(
-        padding: const EdgeInsets.fromLTRB(20, 0, 20, 16),
+        padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            _sectionTitle('From'),
+            _sectionTitle(t.ark.move.from),
             for (final endpoint in options.all)
               _option(
                 endpoint,
@@ -151,7 +154,7 @@ class _MoveSheetState extends State<MoveSheet> {
                 onTap: () => _selectFrom(endpoint),
               ),
             CoconutLayout.spacing_400h,
-            _sectionTitle('To'),
+            _sectionTitle(t.ark.move.to),
             for (final endpoint in options.all)
               if (endpoint != from)
                 _option(
@@ -160,17 +163,14 @@ class _MoveSheetState extends State<MoveSheet> {
                   enabled: destinations.contains(endpoint),
                   onTap: () => setState(() => _to = endpoint),
                 ),
-            CoconutLayout.spacing_400h,
-            CoconutButton(
-              text: 'Continue',
+            CoconutLayout.spacing_500h,
+            InlineActionButton(
+              text: t.next,
               isActive: from != null && _to != null,
               onPressed: () {
                 if (from == null || _to == null) return;
                 Navigator.pop(context, MoveSelection(from, _to!));
               },
-              height: 52,
-              backgroundColor: context.coconutColors.primary,
-              foregroundColor: context.coconutColors.background,
             ),
           ],
         ),
@@ -179,40 +179,31 @@ class _MoveSheetState extends State<MoveSheet> {
   }
 
   Widget _sectionTitle(String text) => Padding(
-    padding: const EdgeInsets.only(bottom: 8),
+    padding: const EdgeInsets.only(left: 4, bottom: 4),
     child: Text(text, style: CoconutTypography.body2_14_Bold.setColor(context.coconutColors.primaryText)),
   );
 
+  /// A row of Coconut's selectable sheets: the place and its balance, with a check when picked.
   Widget _option(MoveEndpoint endpoint, {required bool selected, required bool enabled, required VoidCallback onTap}) {
     final colors = context.coconutColors;
-    final textColor = enabled ? colors.primaryText : colors.tertiaryText;
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 8),
-      child: Material(
-        color: colors.surface,
-        borderRadius: BorderRadius.circular(CoconutStyles.radius_300),
-        child: InkWell(
-          borderRadius: BorderRadius.circular(CoconutStyles.radius_300),
-          onTap: enabled ? onTap : null,
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-            child: Row(
-              children: [
-                Icon(
-                  selected ? Icons.radio_button_checked : Icons.radio_button_unchecked,
-                  size: 20,
-                  color: enabled ? colors.iconPrimary : colors.iconDisabled,
-                ),
-                CoconutLayout.spacing_300w,
-                Expanded(child: Text(moveEndpointText(endpoint), style: CoconutTypography.body2_14.setColor(textColor))),
-                Text(
-                  widget.currentUnit.displayBitcoinAmount(endpoint.balanceSats, withUnit: true),
-                  style: CoconutTypography.body3_12_Number.setColor(textColor),
-                ),
-              ],
+    return SelectableBottomSheetTextItem(
+      isSelected: selected,
+      isDisabled: !enabled,
+      reserveCheckIconSpace: true,
+      onTap: onTap,
+      child: Row(
+        children: [
+          Expanded(
+            child: Text(
+              moveEndpointText(endpoint),
+              style: CoconutTypography.body2_14_Bold.setColor(colors.primaryText),
             ),
           ),
-        ),
+          Text(
+            widget.currentUnit.displayBitcoinAmount(endpoint.balanceSats, withUnit: true),
+            style: CoconutTypography.body3_12_Number.setColor(colors.secondaryText),
+          ),
+        ],
       ),
     );
   }
