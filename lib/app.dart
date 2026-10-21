@@ -5,6 +5,7 @@ import 'package:coconut_wallet/app/providers/app_providers.dart';
 import 'package:coconut_wallet/app/router/app_routes.dart';
 import 'package:coconut_wallet/app/theme/app_cupertino_theme.dart';
 import 'package:coconut_wallet/app_guard.dart';
+import 'package:coconut_wallet/constants/external_links.dart';
 import 'package:coconut_wallet/services/hardware_wallet/bitbox02_connectivity_service.dart';
 import 'package:coconut_wallet/services/hardware_wallet/trezor_connectivity_service.dart';
 import 'package:coconut_wallet/design_system/theme/coconut_theme_data.dart';
@@ -25,7 +26,8 @@ import 'package:coconut_wallet/localization/strings.g.dart';
 enum AppEntryFlow { splash, main, pinCheck }
 
 class CoconutWalletApp extends StatefulWidget {
-  static late String kMempoolHost;
+  /// Regtest mempool (block explorer, mempool API and fee estimates)
+  static String kMempoolHost = DEFAULT_EXPLORER_URL_REGTEST;
   static late String kFaucetHost;
   static late NetworkType kNetworkType;
   static late bool kIsFirebaseAnalyticsUsed;

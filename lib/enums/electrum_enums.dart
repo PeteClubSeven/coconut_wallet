@@ -79,9 +79,13 @@ enum DefaultElectrumServer {
     true, // isRegtest
   );
 
-  const DefaultElectrumServer(this.server, this.serverName, this.order, this.isRegtest, [this.isTestnet = false]);
+  const DefaultElectrumServer(this._server, this.serverName, this.order, this.isRegtest, [this.isTestnet = false]);
 
-  final ElectrumServer server;
+  /// Replaces the [regtest] server, e.g. with a self-hosted regtest stack (ELECTRUM_SERVER in regtest.env)
+  static ElectrumServer? regtestOverride;
+
+  final ElectrumServer _server;
+  ElectrumServer get server => this == regtest ? regtestOverride ?? _server : _server;
   final String serverName;
   final int order;
   final bool isRegtest;

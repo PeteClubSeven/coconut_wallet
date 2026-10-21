@@ -4,6 +4,8 @@ import 'package:coconut_lib/coconut_lib.dart';
 import 'package:coconut_wallet/app.dart';
 import 'package:coconut_wallet/app/bootstrap/localization_bootstrap.dart';
 import 'package:coconut_wallet/constants/dotenv_keys.dart';
+import 'package:coconut_wallet/enums/electrum_enums.dart';
+import 'package:coconut_wallet/model/node/electrum_server.dart';
 import 'package:coconut_wallet/firebase_options.dart';
 import 'package:coconut_wallet/constants/shared_pref_keys.dart';
 import 'package:coconut_wallet/design_system/theme/coconut_theme_data.dart';
@@ -63,6 +65,15 @@ class AppBootstrap {
     CoconutWalletApp.kFaucetHost = dotenv.env[DotenvKeys.apiHost] ?? '';
     CoconutWalletApp.kNetworkType = NetworkType.getNetworkType(dotenv.env[DotenvKeys.networkType]!);
     NetworkType.setNetworkType(CoconutWalletApp.kNetworkType);
+
+    final mempoolUrl = dotenv.env[DotenvKeys.mempoolUrl];
+    if (mempoolUrl != null && mempoolUrl.isNotEmpty) {
+      CoconutWalletApp.kMempoolHost = mempoolUrl;
+    }
+    final electrumServer = dotenv.env[DotenvKeys.electrumServer];
+    if (electrumServer != null && electrumServer.isNotEmpty) {
+      DefaultElectrumServer.regtestOverride = ElectrumServer.fromUrl(electrumServer);
+    }
   }
 
   static Future<void> _initializeFirebase() async {

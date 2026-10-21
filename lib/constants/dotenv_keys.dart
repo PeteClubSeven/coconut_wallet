@@ -2,6 +2,10 @@ class DotenvKeys {
   static const String apiHost = 'API_HOST';
   static const String networkType = 'NETWORK_TYPE';
 
+  // Optional regtest overrides, for running against a self-hosted regtest stack
+  static const String mempoolUrl = 'MEMPOOL_URL';
+  static const String electrumServer = 'ELECTRUM_SERVER';
+
   // Firebase
   static const String firebaseApiKeyAndroid = 'FIREBASE_API_KEY_ANDROID';
   static const String firebaseAppIdAndroid = 'FIREBASE_APP_ID_ANDROID';

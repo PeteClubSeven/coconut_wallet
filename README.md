@@ -214,6 +214,15 @@ This project requires environment variables configured via `flutter_dotenv`. Cre
 NETWORK_TYPE=regtest
 ```
 
+By default the regtest flavor uses Coconut's hosted regtest network. To run against a self-hosted regtest stack instead, add the optional overrides below (`10.0.2.2` is the host machine as seen from the Android emulator):
+
+```env
+# Block explorer, mempool API and fee estimates
+MEMPOOL_URL=http://10.0.2.2:8082
+# Default Electrum server: tcp://host:port or ssl://host:port
+ELECTRUM_SERVER=tcp://10.0.2.2:50001
+```
+
 `mainnet.env` (only needed if you build with `--flavor mainnet`; the `FIREBASE_*` values below are only read when building with `--dart-define=USE_FIREBASE=true`, so they can be left blank for local builds):
 
 ```env
