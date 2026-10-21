@@ -55,8 +55,8 @@ void main() {
       createArkMovement(subsystemName: 'bark.round', subsystemKind: 'refresh', effectiveBalanceSats: -50),
     );
     expect(refresh.status, TransactionStatus.self);
-    expect(refresh.statusLabel, 'Refresh');
-    expect(ArkActivity(createArkMovement(subsystemName: 'bark.lightning_receive')).railLabel, 'Lightning');
+    expect(refresh.label, ArkActivityLabel.refresh);
+    expect(ArkActivity(createArkMovement(subsystemName: 'bark.lightning_receive')).rail, ArkRail.lightning);
   });
 
   test('equality follows the key and content, so unchanged lists diff as equal', () {
@@ -103,7 +103,7 @@ void main() {
       expect(move.amount, -500); // the on-chain fee and the board fee
       expect(move.displayAmount, 99800); // what arrived in Ark
       expect(move.status, TransactionStatus.self);
-      expect(move.statusLabel, 'Moved to Ark');
+      expect(move.label, ArkActivityLabel.movedToArk);
     });
 
     test('a move is pending until its on-chain transaction confirms', () {
@@ -148,7 +148,7 @@ void main() {
 
       expect(move.amount, -400);
       expect(move.displayAmount, 30000);
-      expect(move.statusLabel, 'Moved on-chain');
+      expect(move.label, ArkActivityLabel.movedOnchain);
     });
 
     test('an offboard to another wallet stays a send', () {
@@ -163,7 +163,7 @@ void main() {
 
       expect(activity.isMove, isFalse);
       expect(activity.status, TransactionStatus.sent);
-      expect(activity.statusLabel, 'Sent on-chain');
+      expect(activity.label, ArkActivityLabel.sentOnchain);
       expect(activity.displayAmount, -50000);
     });
   });

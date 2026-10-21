@@ -1,4 +1,5 @@
 import 'package:coconut_lib/coconut_lib.dart';
+import 'package:coconut_wallet/utils/payment_request_parser.dart';
 import 'package:coconut_wallet/utils/send_recipients.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -21,7 +22,8 @@ void main() {
       expect(list.canContinue, isTrue, reason: input);
     }
     final offer = check([const SendRecipientRow('lno1qgsqvgnwgcg35z6ee2h3yczraddm72xrfua9uve2rlrm9deu7xyfzr')]);
-    expect(offer.checks.single.problem, 'BOLT12 offers are not supported yet');
+    expect(offer.checks.single.problem, SendRecipientProblem.unsupported);
+    expect(offer.checks.single.request!.problem, PaymentRequestProblem.bolt12);
   });
 
   test('an amount the destination carries is fixed', () {
@@ -37,7 +39,7 @@ void main() {
 
   test('an amount is needed unless it is fixed or Max', () {
     final missing = check([const SendRecipientRow(_bitcoin)]);
-    expect(missing.checks.single.problem, 'Enter an amount');
+    expect(missing.checks.single.problem, SendRecipientProblem.needsAmount);
     expect(missing.canContinue, isFalse);
 
     final max = check([const SendRecipientRow(_bitcoin, isMax: true)]);
@@ -49,7 +51,7 @@ void main() {
     final arkMax = check([const SendRecipientRow(_ark, isMax: true)]);
     expect(arkMax.checks.single.canUseMax, isFalse);
     expect(arkMax.maxLast, isFalse);
-    expect(arkMax.checks.single.problem, 'Enter an amount');
+    expect(arkMax.checks.single.problem, SendRecipientProblem.needsAmount);
   });
 
   test('several recipients need on-chain addresses', () {
@@ -60,7 +62,7 @@ void main() {
       const SendRecipientRow('bitcoin:?ark=$_ark&amount=0.0001'),
       const SendRecipientRow('bitcoin:$_otherBitcoin?ark=$_ark&amount=0.0001'),
     ]);
-    const onchainOnly = 'Several recipients are paid on-chain: use a Bitcoin address';
+    const onchainOnly = SendRecipientProblem.onchainOnly;
     expect(list.checks.map((check) => check.problem).toList(), [null, onchainOnly, onchainOnly, onchainOnly, null]);
     expect(list.checks.last.amountSats, 10000);
     expect(list.canContinue, isFalse);
@@ -74,7 +76,7 @@ void main() {
       const SendRecipientRow(_otherBitcoin, isMax: true),
     ]);
     expect(list.checks[1].isEmpty, isTrue);
-    expect(list.checks[2].problem, 'Already a recipient');
+    expect(list.checks[2].problem, SendRecipientProblem.duplicate);
     expect(list.checks[3].canUseMax, isTrue);
     expect(list.recipients.length, 3);
 
@@ -82,14 +84,14 @@ void main() {
       const SendRecipientRow(_bitcoin, isMax: true),
       const SendRecipientRow(_otherBitcoin, enteredAmountSats: 10000),
     ]);
-    expect(maxNotLast.checks.first.problem, 'Enter an amount');
+    expect(maxNotLast.checks.first.problem, SendRecipientProblem.needsAmount);
     expect(maxNotLast.maxLast, isFalse);
   });
 
   test('more than either balance can pay is flagged', () {
-    expect(check([const SendRecipientRow(_ark, enteredAmountSats: 150000)]).problem, 'More than you have');
+    expect(check([const SendRecipientRow(_ark, enteredAmountSats: 150000)]).exceedsAvailable, isTrue);
     // A Bitcoin address can be paid from the larger of the two.
-    expect(check([const SendRecipientRow(_bitcoin, enteredAmountSats: 150000)]).problem, isNull);
+    expect(check([const SendRecipientRow(_bitcoin, enteredAmountSats: 150000)]).exceedsAvailable, isFalse);
     // Several recipients are on-chain only.
     final several = check(
       [
@@ -99,6 +101,6 @@ void main() {
       onchain: 100000,
       ark: 500000,
     );
-    expect(several.problem, 'More than you have');
+    expect(several.exceedsAvailable, isTrue);
   });
 }

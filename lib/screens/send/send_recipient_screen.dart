@@ -11,7 +11,7 @@ import 'package:coconut_wallet/providers/ark_provider.dart';
 import 'package:coconut_wallet/providers/preferences/preference_provider.dart';
 import 'package:coconut_wallet/providers/send_info_provider.dart';
 import 'package:coconut_wallet/providers/wallet_provider.dart';
-import 'package:coconut_wallet/screens/send/payment_request_labels.dart';
+import 'package:coconut_wallet/widgets/features/ark/ark_texts.dart';
 import 'package:coconut_wallet/ui/coconut/coconut_app_bar.dart';
 import 'package:coconut_wallet/utils/address_scan_util.dart';
 import 'package:coconut_wallet/utils/balance_format_util.dart';
@@ -286,9 +286,12 @@ class _SendRecipientScreenState extends State<SendRecipientScreen> {
             ),
             CoconutLayout.spacing_200h,
             _buildAvailable(arkAvailable),
-            if (check.problem != null) ...[
+            if (check.exceedsAvailable) ...[
               CoconutLayout.spacing_200h,
-              Text(check.problem!, style: CoconutTypography.body3_12.setColor(colors.danger)),
+              Text(
+                t.ark.recipient_problem.more_than_available,
+                style: CoconutTypography.body3_12.setColor(colors.danger),
+              ),
             ],
           ],
         ),
@@ -318,7 +321,7 @@ class _SendRecipientScreenState extends State<SendRecipientScreen> {
     final row = _rows[index];
     final request = check.request;
     // "Enter an amount" is what the empty amount field already says.
-    final problem = check.problem == 'Enter an amount' ? null : check.problem;
+    final problem = check.problem == SendRecipientProblem.needsAmount ? null : recipientProblemText(check);
     return Container(
       padding: const EdgeInsets.fromLTRB(16, 4, 4, 12),
       decoration: BoxDecoration(color: colors.surface, borderRadius: BorderRadius.circular(CoconutStyles.radius_300)),

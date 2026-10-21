@@ -161,13 +161,13 @@ void main() {
 
     final tooMuch = create(_bitcoin, amount: 400000, fees: RecommendedFee(1, 1, 1, 1, 1));
     await tooMuch.refreshRecommendedFees();
-    expect(tooMuch.statusOf(tooMuch.onchainOption!).problem, 'Not enough on-chain');
+    expect(tooMuch.statusOf(tooMuch.onchainOption!).problem, SendOptionProblem.notEnoughOnchain);
   });
 
   test('without recommended fees the user has to set a rate', () async {
     final vm = create(_bitcoin, amount: 50000);
     await vm.refreshRecommendedFees();
-    expect(vm.statusOf(vm.onchainOption!).problem, 'Set a fee rate');
+    expect(vm.statusOf(vm.onchainOption!).problem, SendOptionProblem.needsFeeRate);
     vm.feeRateController.text = '3';
     expect(vm.feeRate, 3);
     expect(vm.statusOf(vm.onchainOption!).isReady, isTrue);
@@ -198,7 +198,7 @@ void main() {
     ark.isOpen = false;
     final locked = create(_bitcoin, amount: 20000);
     final viaArk = locked.options.last;
-    expect(locked.statusOf(viaArk).problem, 'Ark is locked');
+    expect(locked.statusOf(viaArk).problem, SendOptionProblem.arkLocked);
     expect(locked.statusOf(viaArk).canUnlock, isTrue);
 
     ark.isOpen = true;
@@ -206,19 +206,19 @@ void main() {
     await settle();
     expect(locked.statusOf(viaArk).isReady, isTrue);
 
-    expect(create(_bitcoin, amount: 200).statusOf(viaArk).problem, 'The amount is below the dust limit');
+    expect(create(_bitcoin, amount: 200).statusOf(viaArk).problem, SendOptionProblem.belowDust);
 
     final short = create(_bitcoin, amount: 99000);
     await settle();
-    expect(short.statusOf(viaArk).problem, 'Not enough in Ark'); // 99,000 + 2,530 > 100,000
+    expect(short.statusOf(viaArk).problem, SendOptionProblem.notEnoughArk); // 99,000 + 2,530 > 100,000
 
     ark.acceptsAddress = false;
     final arkVm = create(_ark, amount: 1000);
     await settle();
-    expect(arkVm.statusOf(arkVm.options.single).problem, contains('doesn\'t accept this Ark address'));
+    expect(arkVm.statusOf(arkVm.options.single).problem, SendOptionProblem.arkAddressRefused);
 
     ark.isSupported = false;
-    expect(create(_ark, amount: 1000).statusOf(arkVm.options.single).problem, 'This wallet has no Ark');
+    expect(create(_ark, amount: 1000).statusOf(arkVm.options.single).problem, SendOptionProblem.noArk);
   });
 
   test('the cheapest option that can be paid is preselected until the user picks one', () async {

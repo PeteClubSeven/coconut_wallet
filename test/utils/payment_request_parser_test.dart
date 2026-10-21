@@ -45,7 +45,7 @@ void main() {
   test('an invoice for another network is unsupported', () {
     final request = parse('lnbc300u1pqqqqqq');
     expect(request.kind, PaymentRequestKind.unsupported);
-    expect(request.problem, contains('another network'));
+    expect(request.problem, PaymentRequestProblem.invoiceNetwork);
   });
 
   test('an Ark address', () {
@@ -118,7 +118,10 @@ void main() {
     });
 
     test('unknown required parameters and bad addresses are unsupported', () {
-      expect(parse('bitcoin:$_bitcoin?req-somethingnew=1').kind, PaymentRequestKind.unsupported);
+      final required = parse('bitcoin:$_bitcoin?req-somethingnew=1');
+      expect(required.kind, PaymentRequestKind.unsupported);
+      expect(required.problem, PaymentRequestProblem.requiredParameter);
+      expect(required.problemDetail, 'req-somethingnew');
       expect(parse('bitcoin:bc1qnotregtest?ark=$_ark').kind, PaymentRequestKind.unsupported);
       expect(parse('bitcoin:?label=nothing').kind, PaymentRequestKind.unsupported);
     });

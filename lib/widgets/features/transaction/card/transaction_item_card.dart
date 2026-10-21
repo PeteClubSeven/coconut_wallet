@@ -12,6 +12,7 @@ import 'package:coconut_wallet/widgets/common/icon/transaction_status_gradient_m
 import 'package:flutter/material.dart';
 import 'package:flutter_svg/svg.dart';
 import 'package:coconut_wallet/constants/icon_path.dart';
+import 'package:coconut_wallet/widgets/features/ark/ark_texts.dart';
 
 /// A row of a wallet's history: an on-chain transaction or an Ark movement.
 class TransactionItemCard extends StatelessWidget {
@@ -71,7 +72,7 @@ class TransactionItemCard extends StatelessWidget {
       default:
         return const SizedBox.shrink(); // fallback
     }
-    return _buildIconStatus(context, iconPath, iconColor, _arkActivity?.statusLabel ?? statusText);
+    return _buildIconStatus(context, iconPath, iconColor, arkActivityLabelText(_arkActivity?.label) ?? statusText);
   }
 
   Widget _buildIconStatus(BuildContext context, String assetPath, Color? iconColor, String statusString) {
@@ -98,7 +99,7 @@ class TransactionItemCard extends StatelessWidget {
         icon,
         CoconutLayout.spacing_200w,
         Text(statusString, style: CoconutTypography.body2_14.setColor(context.coconutColors.primaryText)),
-        if (_arkActivity != null) ...[CoconutLayout.spacing_200w, _buildRailBadge(context, _arkActivity!.railLabel)],
+        if (_arkActivity != null) ...[CoconutLayout.spacing_200w, _buildRailBadge(context, arkRailText(_arkActivity!.rail))],
       ],
     );
   }

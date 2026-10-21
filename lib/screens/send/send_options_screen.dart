@@ -16,7 +16,7 @@ import 'package:coconut_wallet/providers/view_model/send/send_options_view_model
 import 'package:coconut_wallet/providers/wallet_provider.dart';
 import 'package:coconut_wallet/screens/ark/ark_unlock_flow.dart';
 import 'package:coconut_wallet/screens/common/flutter_hot_wallet_authenticator.dart';
-import 'package:coconut_wallet/screens/send/payment_request_labels.dart';
+import 'package:coconut_wallet/widgets/features/ark/ark_texts.dart';
 import 'package:coconut_wallet/screens/send/utxo_selection_screen.dart';
 import 'package:coconut_wallet/services/ark/ark_wallet_service.dart';
 import 'package:coconut_wallet/ui/coconut/coconut_app_bar.dart';
@@ -181,7 +181,7 @@ class _SendOptionsScreenState extends State<SendOptionsScreen> {
             languageCode: context.read<PreferenceProvider>().language,
             title: 'Pay ${_display(amount)}?',
             description:
-                '${sendOptionTitle(option.kind)} to ${shortenDestination(option.destination)}. '
+                '${sendOptionTitle(option.kind)} to ${shortenMiddle(option.destination)}. '
                 'The Ark server charges ${_display(fee)}.',
             leftButtonText: t.cancel,
             rightButtonText: t.confirm,
@@ -344,7 +344,7 @@ class _SendOptionsScreenState extends State<SendOptionsScreen> {
         children: [
           Expanded(
             child: Text(
-              shortenDestination(destination),
+              shortenMiddle(destination),
               style: CoconutTypography.body2_14_Number.setColor(colors.primaryText),
             ),
           ),
@@ -411,7 +411,7 @@ class _SendOptionsScreenState extends State<SendOptionsScreen> {
                   children: [
                     Expanded(
                       child: Text(
-                        status.problem!,
+                        sendOptionProblemText(status)!,
                         style: CoconutTypography.body3_12.setColor(isSelected ? colors.danger : colors.secondaryText),
                       ),
                     ),

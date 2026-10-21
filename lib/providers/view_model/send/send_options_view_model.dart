@@ -32,18 +32,44 @@ class SendOption {
   bool get usesArk => kind != SendOptionKind.onchain;
 }
 
+/// Why an option can't be used right now.
+enum SendOptionProblem {
+  noArk,
+  oneDestination,
+  maxOnchainOnly,
+  arkLocked,
+  needsAmount,
+  belowDust,
+  someBelowDust,
+  arkAddressRefused,
+
+  /// bark couldn't estimate the fee; [SendOptionStatus.detail] has its error.
+  estimateFailed,
+  notEnoughArk,
+  noOnchainFunds,
+  needsFeeRate,
+  notEnoughOnchain,
+  tooSmallForFee,
+
+  /// The on-chain transaction couldn't be built; [SendOptionStatus.detail] has the error.
+  buildFailed,
+}
+
 /// Whether an option can be used right now, and what it costs.
 class SendOptionStatus {
-  const SendOptionStatus({this.feeSats, this.isEstimating = false, this.problem, this.canUnlock = false});
+  const SendOptionStatus({this.feeSats, this.isEstimating = false, this.problem, this.detail});
 
   final int? feeSats;
   final bool isEstimating;
 
   /// Why it can't be used now, if it can't.
-  final String? problem;
+  final SendOptionProblem? problem;
+
+  /// The error behind [SendOptionProblem.estimateFailed] or [SendOptionProblem.buildFailed].
+  final String? detail;
 
   /// The problem is a locked Ark wallet, which the user can unlock.
-  final bool canUnlock;
+  bool get canUnlock => problem == SendOptionProblem.arkLocked;
 
   bool get isReady => problem == null && !isEstimating && feeSats != null;
 }
@@ -137,7 +163,7 @@ class SendOptionsViewModel extends ChangeNotifier with FeeRateMixin {
   TransactionBuildResult? _onchainResult;
   final Map<SendOptionKind, String> _arkKeys = {};
   final Map<SendOptionKind, int> _arkFees = {};
-  final Map<SendOptionKind, String> _arkProblems = {};
+  final Map<SendOptionKind, ({SendOptionProblem problem, String? detail})> _arkProblems = {};
   final Set<SendOptionKind> _arkEstimating = {};
 
   SendOption? _selected;
@@ -296,45 +322,45 @@ class SendOptionsViewModel extends ChangeNotifier with FeeRateMixin {
 
   SendOptionStatus statusOf(SendOption option) {
     if (option.kind == SendOptionKind.onchain) return _onchainStatus();
-    if (!_ark.isSupported) return const SendOptionStatus(problem: 'This wallet has no Ark');
-    if (isBatch) return const SendOptionStatus(problem: 'Ark pays one destination');
-    if (maxLast) return const SendOptionStatus(problem: 'Max is for on-chain only');
-    if (!_ark.isOpen) return const SendOptionStatus(problem: 'Ark is locked', canUnlock: true);
+    if (!_ark.isSupported) return const SendOptionStatus(problem: SendOptionProblem.noArk);
+    if (isBatch) return const SendOptionStatus(problem: SendOptionProblem.oneDestination);
+    if (maxLast) return const SendOptionStatus(problem: SendOptionProblem.maxOnchainOnly);
+    if (!_ark.isOpen) return const SendOptionStatus(problem: SendOptionProblem.arkLocked);
     final amount = amountSats;
-    if (amount == null || amount <= 0) return const SendOptionStatus(problem: 'Enter an amount');
+    if (amount == null || amount <= 0) return const SendOptionStatus(problem: SendOptionProblem.needsAmount);
     if (option.kind == SendOptionKind.onchainViaArk && amount <= ArkBoardTerms.dustLimitSats) {
-      return const SendOptionStatus(problem: 'The amount is below the dust limit');
+      return const SendOptionStatus(problem: SendOptionProblem.belowDust);
     }
     if (_arkEstimating.contains(option.kind)) return const SendOptionStatus(isEstimating: true);
     final problem = _arkProblems[option.kind];
-    if (problem != null) return SendOptionStatus(problem: problem);
+    if (problem != null) return SendOptionStatus(problem: problem.problem, detail: problem.detail);
     final fee = _arkFees[option.kind];
     if (fee == null) return const SendOptionStatus(isEstimating: true);
-    if (amount + fee > _ark.spendableSats) return SendOptionStatus(feeSats: fee, problem: 'Not enough in Ark');
+    if (amount + fee > _ark.spendableSats) return SendOptionStatus(feeSats: fee, problem: SendOptionProblem.notEnoughArk);
     return SendOptionStatus(feeSats: fee);
   }
 
   SendOptionStatus _onchainStatus() {
-    if (onchainAvailableSats <= 0) return const SendOptionStatus(problem: 'No confirmed on-chain funds');
+    if (onchainAvailableSats <= 0) return const SendOptionStatus(problem: SendOptionProblem.noOnchainFunds);
     if (_feeRate == null) {
       return SendOptionStatus(
         isEstimating: _feeFetchStatus == RecommendedFeeFetchStatus.fetching,
-        problem: _feeFetchStatus == RecommendedFeeFetchStatus.fetching ? null : 'Set a fee rate',
+        problem: _feeFetchStatus == RecommendedFeeFetchStatus.fetching ? null : SendOptionProblem.needsFeeRate,
       );
     }
     for (var i = 0; i < recipients.length; i++) {
       if (maxLast && i == recipients.length - 1) continue;
       final amount = recipients[i].amountSats;
-      if (amount == null || amount <= 0) return const SendOptionStatus(problem: 'Enter an amount');
-      if (amount <= _dustThreshold) return const SendOptionStatus(problem: 'An amount is below the dust limit');
+      if (amount == null || amount <= 0) return const SendOptionStatus(problem: SendOptionProblem.needsAmount);
+      if (amount <= _dustThreshold) return const SendOptionStatus(problem: SendOptionProblem.someBelowDust);
     }
     final result = _onchainResult;
     if (result == null) return const SendOptionStatus(isEstimating: true);
     if (result.isSuccess) return SendOptionStatus(feeSats: result.estimatedFee);
     final error = result.exception;
-    if (error is InsufficientBalanceException) return const SendOptionStatus(problem: 'Not enough on-chain');
-    if (error is SendAmountTooLowException) return const SendOptionStatus(problem: 'Too small to cover the fee');
-    return SendOptionStatus(problem: error?.toString() ?? 'Can\'t build the transaction');
+    if (error is InsufficientBalanceException) return const SendOptionStatus(problem: SendOptionProblem.notEnoughOnchain);
+    if (error is SendAmountTooLowException) return const SendOptionStatus(problem: SendOptionProblem.tooSmallForFee);
+    return SendOptionStatus(problem: SendOptionProblem.buildFailed, detail: error?.toString());
   }
 
   /// Whether the selected option can go ahead.
@@ -437,15 +463,15 @@ class SendOptionsViewModel extends ChangeNotifier with FeeRateMixin {
 
   Future<void> _estimateOne(SendOption option, int amount, String key) async {
     int? fee;
-    String? problem;
+    ({SendOptionProblem problem, String? detail})? problem;
     try {
       if (option.kind == SendOptionKind.ark && !await _ark.validateAddress(option.destination)) {
-        problem = 'bark doesn\'t accept this Ark address (another Ark server or network?)';
+        problem = (problem: SendOptionProblem.arkAddressRefused, detail: null);
       } else {
         fee = await _ark.estimateFee(option.rail!, option.destination, amount);
       }
     } catch (error) {
-      problem = 'Could not estimate the fee: $error';
+      problem = (problem: SendOptionProblem.estimateFailed, detail: '$error');
     }
     if (_disposed || _arkKeys[option.kind] != key) return;
     _arkEstimating.remove(option.kind);

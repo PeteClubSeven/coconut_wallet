@@ -4,17 +4,18 @@ import 'package:coconut_wallet/design_system/context/coconut_theme_context_exten
 import 'package:coconut_wallet/enums/fiat_enums.dart';
 import 'package:coconut_wallet/model/wallet/wallet_item_base.dart';
 import 'package:flutter/material.dart';
+import 'package:coconut_wallet/widgets/features/ark/ark_texts.dart';
 
 enum MoveEndpointKind { onchain, ark, vault }
 
 /// One place funds can move from or to: this hot wallet's on-chain balance, its Ark balance, or
 /// a vault (a watch-only wallet signed with Coconut Vault).
 class MoveEndpoint {
-  const MoveEndpoint({required this.kind, required this.walletId, required this.label, required this.balanceSats});
+  const MoveEndpoint({required this.kind, required this.walletId, required this.walletName, required this.balanceSats});
 
   final MoveEndpointKind kind;
   final int walletId;
-  final String label;
+  final String walletName;
   final int balanceSats;
 
   @override
@@ -42,7 +43,7 @@ class MoveOptions {
   }) : onchain = MoveEndpoint(
          kind: MoveEndpointKind.onchain,
          walletId: hotWallet.id,
-         label: 'On-chain · ${hotWallet.name}',
+         walletName: hotWallet.name,
          balanceSats: onchainBalanceSats,
        ),
        ark =
@@ -51,7 +52,7 @@ class MoveOptions {
                : MoveEndpoint(
                  kind: MoveEndpointKind.ark,
                  walletId: hotWallet.id,
-                 label: 'Ark · ${hotWallet.name}',
+                 walletName: hotWallet.name,
                  balanceSats: arkBalanceSats,
                ),
        vaults = [
@@ -59,7 +60,7 @@ class MoveOptions {
            MoveEndpoint(
              kind: MoveEndpointKind.vault,
              walletId: vault.wallet.id,
-             label: vault.wallet.name,
+             walletName: vault.wallet.name,
              balanceSats: vault.balanceSats,
            ),
        ],
@@ -203,7 +204,7 @@ class _MoveSheetState extends State<MoveSheet> {
                   color: enabled ? colors.iconPrimary : colors.iconDisabled,
                 ),
                 CoconutLayout.spacing_300w,
-                Expanded(child: Text(endpoint.label, style: CoconutTypography.body2_14.setColor(textColor))),
+                Expanded(child: Text(moveEndpointText(endpoint), style: CoconutTypography.body2_14.setColor(textColor))),
                 Text(
                   widget.currentUnit.displayBitcoinAmount(endpoint.balanceSats, withUnit: true),
                   style: CoconutTypography.body3_12_Number.setColor(textColor),

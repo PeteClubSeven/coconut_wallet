@@ -83,6 +83,7 @@ import 'package:coconut_wallet/screens/settings/tools/glossary_bottom_sheet.dart
 import 'package:shimmer/shimmer.dart';
 import 'package:tuple/tuple.dart';
 import 'package:collection/collection.dart';
+import 'package:coconut_wallet/widgets/features/ark/ark_texts.dart';
 
 class WalletHomeScreen extends StatefulWidget {
   const WalletHomeScreen({super.key});
@@ -1619,7 +1620,7 @@ class _WalletHomeScreenState extends State<WalletHomeScreen> with TickerProvider
     final walletName =
         arkActivity == null
             ? _viewModel.getWalletById(walletId).name
-            : '${_viewModel.getWalletById(walletId).name} · ${arkActivity.railLabel}';
+            : '${_viewModel.getWalletById(walletId).name} · ${arkRailText(arkActivity.rail)}';
     const padding = 20.0;
 
     Widget buildTxRow(WalletActivity activity) {

@@ -2,6 +2,17 @@ import 'package:coconut_lib/coconut_lib.dart';
 import 'package:coconut_wallet/utils/address_util.dart';
 import 'package:coconut_wallet/utils/payment_request_parser.dart';
 
+/// Why a row of Send's first page can't be sent yet.
+enum SendRecipientProblem {
+  /// The destination can't be paid at all; the request's own problem says why.
+  unsupported,
+
+  /// One of several recipients without an on-chain address (Ark pays one destination).
+  onchainOnly,
+  duplicate,
+  needsAmount,
+}
+
 /// One row of Send's first page, as entered.
 class SendRecipientRow {
   const SendRecipientRow(this.input, {this.enteredAmountSats, this.isMax = false});
@@ -27,7 +38,7 @@ class SendRecipientCheck {
   final int? amountSats;
 
   /// Why the row can't be sent yet.
-  final String? problem;
+  final SendRecipientProblem? problem;
 
   /// Whether this row may send everything left (the last row, on-chain, with no fixed amount).
   final bool canUseMax;
@@ -68,15 +79,15 @@ class SendRecipientList {
       final canUseMax = i == lastFilled && address != null && fixed == null && request.isPayable;
       final isMax = row.isMax && canUseMax;
       final amount = isMax ? null : (fixed ?? row.enteredAmountSats);
-      String? problem;
+      SendRecipientProblem? problem;
       if (!request.isPayable) {
-        problem = request.problem ?? 'Can\'t pay this';
+        problem = SendRecipientProblem.unsupported;
       } else if (several && address == null) {
-        problem = 'Several recipients are paid on-chain: use a Bitcoin address';
+        problem = SendRecipientProblem.onchainOnly;
       } else if (several && !seen.add(address!)) {
-        problem = 'Already a recipient';
+        problem = SendRecipientProblem.duplicate;
       } else if (!isMax && (amount == null || amount <= 0)) {
-        problem = 'Enter an amount';
+        problem = SendRecipientProblem.needsAmount;
       }
       checks.add(
         SendRecipientCheck(
@@ -102,13 +113,13 @@ class SendRecipientList {
         if (first.bitcoinAddress != null || first.hasArkOrLightning) arkAvailableSats,
       ].fold(0, (best, sats) => sats > best ? sats : best);
     }
-    if (total > available) problem = 'More than you have';
+    exceedsAvailable = total > available;
   }
 
   final List<SendRecipientCheck> checks = [];
 
-  /// A problem with the list as a whole.
-  String? problem;
+  /// The amounts add up to more than any balance that could pay them.
+  bool exceedsAvailable = false;
 
   /// The last recipient gets everything left.
   bool maxLast = false;
@@ -116,5 +127,5 @@ class SendRecipientList {
   /// The filled rows, in order.
   List<SendRecipientCheck> get recipients => checks.where((check) => !check.isEmpty).toList();
 
-  bool get canContinue => problem == null && recipients.isNotEmpty && recipients.every((check) => check.isValid);
+  bool get canContinue => !exceedsAvailable && recipients.isNotEmpty && recipients.every((check) => check.isValid);
 }

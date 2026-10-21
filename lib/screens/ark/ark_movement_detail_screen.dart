@@ -12,6 +12,7 @@ import 'package:coconut_wallet/ui/coconut/coconut_app_bar.dart';
 import 'package:coconut_wallet/widgets/common/buttons/copy_text_container.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import 'package:coconut_wallet/widgets/features/ark/ark_texts.dart';
 
 /// Opens the detail screen of a history entry: the on-chain transaction or the Ark movement.
 void openWalletActivityDetail(BuildContext context, int walletId, WalletActivity activity) {
@@ -109,7 +110,7 @@ class _MovementDetails extends StatelessWidget {
           style: CoconutTypography.heading3_21_NumberBold.setColor(colors.primaryText),
         ),
         Text(
-          '${activity.statusLabel ?? _kindLabel(movement.kind)} · ${activity.railLabel} · ${movement.status.name}',
+          '${arkActivityLabelText(activity.label) ?? _kindLabel(movement.kind)} · ${arkRailText(activity.rail)} · ${movement.status.name}',
           style: CoconutTypography.body2_14.setColor(colors.secondaryText),
         ),
         CoconutLayout.spacing_500h,

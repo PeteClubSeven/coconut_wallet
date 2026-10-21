@@ -18,6 +18,22 @@ enum PaymentRequestKind {
   unknown,
 }
 
+/// Why a request can't be paid.
+enum PaymentRequestProblem {
+  nothingEntered,
+  unknown,
+  bolt12,
+  lnurl,
+  invoiceNetwork,
+  arkNetwork,
+
+  /// A BIP21 `req-` parameter Coconut doesn't understand; [PaymentRequest.problemDetail] names it.
+  requiredParameter,
+  invalidBitcoinAddress,
+  invalidAmount,
+  noMethod,
+}
+
 /// One way to pay a request from the Ark balance.
 class ArkPaymentOption {
   const ArkPaymentOption(this.rail, this.destination);
@@ -39,6 +55,7 @@ class PaymentRequest {
     this.amountSats,
     this.invoiceAmountSats,
     this.problem,
+    this.problemDetail,
   });
 
   final PaymentRequestKind kind;
@@ -55,7 +72,10 @@ class PaymentRequest {
   final int? invoiceAmountSats;
 
   /// Why it can't be paid, for [PaymentRequestKind.unsupported] and [PaymentRequestKind.unknown].
-  final String? problem;
+  final PaymentRequestProblem? problem;
+
+  /// What the problem is about, when it names something (a `req-` parameter).
+  final String? problemDetail;
 
   bool get hasArkOrLightning => arkAddress != null || lightningInvoice != null || lightningAddress != null;
 
@@ -73,15 +93,15 @@ class PaymentRequest {
   static PaymentRequest parse(String input, NetworkType network) {
     final raw = input.trim();
     final lower = raw.toLowerCase();
-    if (raw.isEmpty) return PaymentRequest._(kind: PaymentRequestKind.unknown, raw: raw, problem: 'Nothing entered');
+    if (raw.isEmpty) return PaymentRequest._(kind: PaymentRequestKind.unknown, raw: raw, problem: PaymentRequestProblem.nothingEntered);
     if (lower.startsWith('bitcoin:')) return _parseBip321(raw, network);
 
     final withoutScheme = lower.startsWith('lightning:') ? raw.substring('lightning:'.length) : raw;
     final candidate = withoutScheme.trim();
     final candidateLower = candidate.toLowerCase();
 
-    if (candidateLower.startsWith('lno1')) return _unsupported(raw, 'BOLT12 offers are not supported yet');
-    if (candidateLower.startsWith('lnurl1')) return _unsupported(raw, 'LNURL is not supported yet');
+    if (candidateLower.startsWith('lno1')) return _unsupported(raw, PaymentRequestProblem.bolt12);
+    if (candidateLower.startsWith('lnurl1')) return _unsupported(raw, PaymentRequestProblem.lnurl);
     if (_looksLikeBolt11(candidateLower)) return _parseInvoice(raw, candidateLower, network);
     if (_lightningAddress.hasMatch(candidate)) {
       return PaymentRequest._(kind: PaymentRequestKind.lightningAddress, raw: raw, lightningAddress: candidateLower);
@@ -94,7 +114,7 @@ class PaymentRequest {
         bitcoinAddress: normalizeAddress(candidate),
       );
     }
-    return PaymentRequest._(kind: PaymentRequestKind.unknown, raw: raw, problem: 'Not a payment request Coconut knows');
+    return PaymentRequest._(kind: PaymentRequestKind.unknown, raw: raw, problem: PaymentRequestProblem.unknown);
   }
 
   /// The amount of a BOLT11 invoice in sats (rounded up from msat), or null when amountless or
@@ -141,12 +161,12 @@ class PaymentRequest {
 
   static bool _looksLikeBolt11(String lower) => _invoicePrefixes.any(lower.startsWith) && lower.contains('1');
 
-  static PaymentRequest _unsupported(String raw, String problem) =>
-      PaymentRequest._(kind: PaymentRequestKind.unsupported, raw: raw, problem: problem);
+  static PaymentRequest _unsupported(String raw, PaymentRequestProblem problem, {String? detail}) =>
+      PaymentRequest._(kind: PaymentRequestKind.unsupported, raw: raw, problem: problem, problemDetail: detail);
 
   static PaymentRequest _parseInvoice(String raw, String invoice, NetworkType network) {
     final prefix = _invoicePrefixes.firstWhere(invoice.startsWith);
-    if (prefix != invoicePrefixFor(network)) return _unsupported(raw, 'This invoice is for another network');
+    if (prefix != invoicePrefixFor(network)) return _unsupported(raw, PaymentRequestProblem.invoiceNetwork);
     final amount = bolt11AmountSats(invoice);
     return PaymentRequest._(
       kind: PaymentRequestKind.lightningInvoice,
@@ -160,7 +180,7 @@ class PaymentRequest {
   static PaymentRequest _parseArkAddress(String raw, String address, NetworkType network) {
     final isMainnetAddress = address.startsWith('ark1');
     if (isMainnetAddress != (network == NetworkType.mainnet)) {
-      return _unsupported(raw, 'This Ark address is for another network');
+      return _unsupported(raw, PaymentRequestProblem.arkNetwork);
     }
     return PaymentRequest._(kind: PaymentRequestKind.arkAddress, raw: raw, arkAddress: address);
   }
@@ -182,13 +202,13 @@ class PaymentRequest {
     // BIP21: a required parameter we don't understand means we can't pay it correctly.
     final unknownRequired = params.keys.where((key) => key.startsWith('req-')).firstOrNull;
     if (unknownRequired != null) {
-      return _unsupported(raw, 'It requires "$unknownRequired", which Coconut doesn\'t support');
+      return _unsupported(raw, PaymentRequestProblem.requiredParameter, detail: unknownRequired);
     }
 
     String? bitcoinAddress;
     if (addressPart.isNotEmpty) {
       if (AddressValidator.validateAddress(addressPart, network) != null) {
-        return _unsupported(raw, 'Its Bitcoin address is invalid or for another network');
+        return _unsupported(raw, PaymentRequestProblem.invalidBitcoinAddress);
       }
       bitcoinAddress = normalizeAddress(addressPart);
     } else {
@@ -221,12 +241,12 @@ class PaymentRequest {
     final amountText = params['amount'];
     if (amountText != null && amountText.isNotEmpty) {
       final btc = double.tryParse(amountText);
-      if (btc == null || btc <= 0) return _unsupported(raw, 'Its amount is invalid');
+      if (btc == null || btc <= 0) return _unsupported(raw, PaymentRequestProblem.invalidAmount);
       amount = UnitUtil.convertBitcoinToSatoshi(btc);
     }
 
     if (bitcoinAddress == null && arkAddress == null && invoice == null) {
-      return _unsupported(raw, 'It has no payment method Coconut supports');
+      return _unsupported(raw, PaymentRequestProblem.noMethod);
     }
     return PaymentRequest._(
       kind: PaymentRequestKind.bip321,

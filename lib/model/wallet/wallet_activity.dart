@@ -3,6 +3,12 @@ import 'package:coconut_wallet/model/ark/ark_movement.dart';
 import 'package:coconut_wallet/model/wallet/transaction_record.dart';
 import 'package:coconut_wallet/utils/transaction_util.dart';
 
+/// The network an Ark activity went over.
+enum ArkRail { ark, lightning }
+
+/// What an Ark activity is, where "sent" or "received" would mislead.
+enum ArkActivityLabel { refresh, movedToArk, movedOnchain, sentOnchain, exit, failed, canceled }
+
 /// One entry of a wallet's history: an on-chain transaction or, for hot wallets with Ark, an
 /// Ark movement (an Ark or Lightning payment, a refresh…).
 ///
@@ -137,23 +143,24 @@ class ArkActivity extends WalletActivity {
   String? get memo => null;
 
   /// Which network it went over, shown next to the status.
-  String get railLabel => switch (movement.kind) {
-    ArkMovementKind.lightningSend || ArkMovementKind.lightningReceive => 'Lightning',
-    _ => 'Ark',
+  ArkRail get rail => switch (movement.kind) {
+    ArkMovementKind.lightningSend || ArkMovementKind.lightningReceive => ArkRail.lightning,
+    _ => ArkRail.ark,
   };
 
   /// Replaces the generic sent/received label where that would mislead.
-  String? get statusLabel => switch (movement.kind) {
-    ArkMovementKind.refresh => 'Refresh',
-    ArkMovementKind.board => 'Moved to Ark',
+  ArkActivityLabel? get label => switch (movement.kind) {
+    ArkMovementKind.refresh => ArkActivityLabel.refresh,
+    ArkMovementKind.board => ArkActivityLabel.movedToArk,
     // Without this wallet's transaction, the funds went elsewhere (e.g. to a vault).
-    ArkMovementKind.offboard || ArkMovementKind.sendOnchain => isMove ? 'Moved on-chain' : 'Sent on-chain',
-    ArkMovementKind.exit => 'Exit',
+    ArkMovementKind.offboard || ArkMovementKind.sendOnchain =>
+      isMove ? ArkActivityLabel.movedOnchain : ArkActivityLabel.sentOnchain,
+    ArkMovementKind.exit => ArkActivityLabel.exit,
     _ =>
       movement.status == ArkMovementStatus.failed
-          ? 'Failed'
+          ? ArkActivityLabel.failed
           : movement.status == ArkMovementStatus.canceled
-          ? 'Canceled'
+          ? ArkActivityLabel.canceled
           : null,
   };
 
