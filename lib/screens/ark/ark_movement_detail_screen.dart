@@ -7,7 +7,8 @@ import 'package:coconut_wallet/model/wallet/transaction_address.dart';
 import 'package:coconut_wallet/model/wallet/transaction_record.dart';
 import 'package:coconut_wallet/providers/node_provider/node_provider.dart';
 import 'package:coconut_wallet/providers/preferences/block_explorer_provider.dart';
-import 'package:coconut_wallet/providers/wallet_provider.dart';
+import 'package:coconut_wallet/services/mempool_transaction_service.dart';
+import 'package:coconut_wallet/utils/logger.dart';
 import 'package:coconut_wallet/utils/uri_launcher.dart';
 import 'package:coconut_wallet/widgets/features/transaction/card/transaction_input_output_card.dart';
 import 'package:coconut_wallet/app/router/app_route_names.dart';
@@ -88,9 +89,9 @@ class _ArkMovementDetailScreenState extends State<ArkMovementDetailScreen> {
 
   void _toggleUnit() => setState(() => _unit = _unit.isBasedOnSatoshi ? BitcoinUnit.btc : BitcoinUnit.sats);
 
-  /// Looks up [movement]'s offboard transaction through Coconut's node, again whenever the
+  /// Looks up [movement]'s offboard transaction on the block explorer, again whenever the
   /// movement settles, so the inputs, fee and confirmations show as on the transaction detail
-  /// screen. Until the node has it, the transaction from bark's record shows its outputs.
+  /// screen. Until then, the transaction from bark's record shows its outputs.
   void _loadOnchainTx(ArkMovement movement) {
     final hex = movement.offboardTxHex;
     final txid = movement.linkedTxid;
@@ -101,9 +102,13 @@ class _ArkMovementDetailScreenState extends State<ArkMovementDetailScreen> {
     _onchainTx ??= _recordFromHex(hex, txid);
     WidgetsBinding.instance.addPostFrameCallback((_) async {
       if (!mounted) return;
-      final wallet = context.read<WalletProvider>().getWalletById(widget.id);
-      final result = await context.read<NodeProvider>().getTransactionRecord(wallet, txid);
-      if (mounted && result.isSuccess) setState(() => _onchainTx = result.value);
+      final explorerUrl = context.read<BlockExplorerProvider>().blockExplorerUrl;
+      try {
+        final record = await MempoolTransactionService(explorerUrl).fetch(txid);
+        if (mounted) setState(() => _onchainTx = record);
+      } catch (error) {
+        Logger.error('ArkMovementDetailScreen: looking up $txid failed: $error');
+      }
     });
   }
 
@@ -289,8 +294,14 @@ class _MovementDetails extends StatelessWidget {
             CopyTextContainer(text: tx.transactionHash, textStyle: valueStyle),
             CoconutLayout.spacing_300h,
             TransactionInputOutputCard(
+              // A new card per record: the card can't take a changed transaction (it re-assigns a
+              // late final field), and the explorer's record replaces bark's once it arrives.
+              key: ObjectKey(tx),
               transaction: tx,
-              isSameAddress: (address, _) => destinations.contains(address),
+              // The card colours the outputs that aren't "own" as the recipients of a send; here
+              // that's the movement's destinations, and the Ark server's change and anchors read
+              // like change.
+              isSameAddress: (address, _) => !destinations.contains(address),
               currentUnit: unit,
             ),
           ],
