@@ -22,6 +22,7 @@ import 'package:coconut_wallet/repository/realm/utxo_repository.dart';
 import 'package:coconut_wallet/repository/realm/wallet_repository.dart';
 import 'package:coconut_wallet/repository/secure_storage/hot_wallet_secret_repository.dart';
 import 'package:coconut_wallet/repository/shared_preference/shared_prefs_repository.dart';
+import 'package:coconut_wallet/services/ark/ark_wallet_service.dart';
 import 'package:collection/collection.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -367,6 +368,38 @@ class FakeSharedPrefsRepository extends Fake implements SharedPrefsRepository {
   }
 }
 
+class FakeArkWalletService extends Fake implements ArkWalletService {
+  FakeArkWalletService({this.enabled = false, Set<String>? fingerprints})
+    : fingerprints = {...?fingerprints?.map((fp) => fp.toLowerCase())};
+
+  final bool enabled;
+  final Set<String> fingerprints;
+  final List<(String, String, bool)> created = [];
+  final List<String> deleted = [];
+  Object? createError;
+  void Function()? onCreate;
+
+  @override
+  bool get isEnabled => enabled;
+
+  @override
+  Future<void> create(String fingerprint, String seedHex, {required bool restore}) async {
+    onCreate?.call();
+    if (createError != null) throw createError!;
+    created.add((fingerprint, seedHex, restore));
+    fingerprints.add(fingerprint.toLowerCase());
+  }
+
+  @override
+  Future<void> delete(String fingerprint) async {
+    deleted.add(fingerprint.toLowerCase());
+    fingerprints.remove(fingerprint.toLowerCase());
+  }
+
+  @override
+  Future<List<String>> listFingerprints() async => fingerprints.toList();
+}
+
 // ─────────────────────────────────────────────
 // 테스트 Fixture 헬퍼
 // ─────────────────────────────────────────────
@@ -524,6 +557,7 @@ Future<WalletProvider> _buildProvider(
   FakePreferenceProvider? preferenceProvider,
   FakeHotWalletSecretRepository? secretRepository,
   FakeSharedPrefsRepository? sharedPrefsRepository,
+  FakeArkWalletService? arkWalletService,
 }) async {
   final provider = WalletProvider(
     addressRepository ?? FakeAddressRepository(),
@@ -534,6 +568,7 @@ Future<WalletProvider> _buildProvider(
     preferenceProvider ?? FakePreferenceProvider(),
     hotWalletSecretRepository: secretRepository ?? FakeHotWalletSecretRepository(),
     sharedPrefsRepository: sharedPrefsRepository ?? FakeSharedPrefsRepository(),
+    arkWalletService: arkWalletService ?? FakeArkWalletService(),
   );
   // 생성자 내 _loadWalletListFromDB().then(...) 완료 대기
   while (provider.walletLoadState != WalletLoadState.loadCompleted) {
@@ -1325,6 +1360,192 @@ void main() {
 
       expect(provider.getWatchedAddressCount(walletId), 2 * kSubscriptionGapLimit);
 
+      provider.dispose();
+    });
+  });
+
+  // ───────────────────────────────────────────
+  // Ark (bark)
+  // ───────────────────────────────────────────
+  group('WalletProvider - Ark', () {
+    final arkSeed = 'ab' * 64;
+
+    test('creates the Ark wallet before the hot wallet becomes active', () async {
+      final walletRepo = FakeWalletRepository()..addHotWalletResult = _createSinglesigWalletListItem(isHotWallet: true);
+      final ark = FakeArkWalletService(enabled: true);
+      var activeUpdatesWhenArkCreated = -1;
+      ark.onCreate =
+          () =>
+              activeUpdatesWhenArkCreated =
+                  walletRepo.lifecycleUpdates.where((u) => u.$2 == HotWalletLifecycleState.active).length;
+      final provider = await _buildProvider(walletRepo, arkWalletService: ark);
+
+      await provider.addHotWallet(
+        _createSinglesigWatchOnlyWallet(),
+        secureStorageKey: 'local_wallet_seed_1',
+        backupVerified: true,
+        enterPassphraseWhenSigning: false,
+        createdAt: DateTime.utc(2026, 10, 19),
+        arkSeedHex: arkSeed,
+        restoreArk: true,
+      );
+
+      expect(ark.created, [('D45AA182', arkSeed, true)]);
+      expect(activeUpdatesWhenArkCreated, 0);
+      expect(walletRepo.lifecycleUpdates.last, (1, HotWalletLifecycleState.active));
+
+      provider.dispose();
+    });
+
+    test('rolls back the hot wallet, its secret and Ark data when Ark creation fails', () async {
+      final walletRepo = FakeWalletRepository()..addHotWalletResult = _createSinglesigWalletListItem(isHotWallet: true);
+      final secretRepository = FakeHotWalletSecretRepository();
+      final ark = FakeArkWalletService(enabled: true)..createError = StateError('bark failed');
+      final provider = await _buildProvider(walletRepo, secretRepository: secretRepository, arkWalletService: ark);
+      // The view model stores the secret before calling addHotWallet.
+      secretRepository.storedKeys.add('local_wallet_seed_1');
+
+      await expectLater(
+        provider.addHotWallet(
+          _createSinglesigWatchOnlyWallet(),
+          secureStorageKey: 'local_wallet_seed_1',
+          backupVerified: true,
+          enterPassphraseWhenSigning: false,
+          createdAt: DateTime.utc(2026, 10, 19),
+          arkSeedHex: arkSeed,
+        ),
+        throwsA(isA<StateError>()),
+      );
+
+      expect(walletRepo.deletedWalletIds, [1]);
+      expect(secretRepository.deletedKeys, ['local_wallet_seed_1']);
+      expect(ark.deleted, ['d45aa182']);
+      expect(walletRepo.lifecycleUpdates.where((u) => u.$2 == HotWalletLifecycleState.active), isEmpty);
+      expect(provider.walletItemList, isEmpty);
+
+      provider.dispose();
+    });
+
+    test('refuses to add a hot wallet without an Ark seed while Ark is enabled', () async {
+      final walletRepo = FakeWalletRepository()..addHotWalletResult = _createSinglesigWalletListItem(isHotWallet: true);
+      final ark = FakeArkWalletService(enabled: true);
+      final provider = await _buildProvider(walletRepo, arkWalletService: ark);
+
+      await expectLater(
+        provider.addHotWallet(
+          _createSinglesigWatchOnlyWallet(),
+          secureStorageKey: 'local_wallet_seed_1',
+          backupVerified: true,
+          enterPassphraseWhenSigning: false,
+          createdAt: DateTime.utc(2026, 10, 19),
+        ),
+        throwsA(isA<ArgumentError>()),
+      );
+      expect(walletRepo.deletedWalletIds, [1]);
+      expect(provider.walletItemList, isEmpty);
+
+      provider.dispose();
+    });
+
+    test('creates the Ark wallet when converting a watch-only wallet into a hot wallet', () async {
+      final existingWatchOnly = _createSinglesigWalletListItem(id: 7, name: 'Existing Watch-only');
+      final walletRepo =
+          FakeWalletRepository()
+            ..walletItems = [existingWatchOnly]
+            ..convertWatchOnlyWalletResult = _createSinglesigWalletListItem(
+              id: 7,
+              name: 'Existing Watch-only',
+              isHotWallet: true,
+            );
+      final ark = FakeArkWalletService(enabled: true);
+      final provider = await _buildProvider(walletRepo, arkWalletService: ark);
+
+      await provider.addHotWallet(
+        _createSinglesigWatchOnlyWallet(),
+        secureStorageKey: 'local_wallet_seed_converted',
+        backupVerified: true,
+        enterPassphraseWhenSigning: false,
+        createdAt: DateTime.utc(2026, 10, 19),
+        watchOnlyWalletIdToConvert: 7,
+        arkSeedHex: arkSeed,
+        restoreArk: true,
+      );
+
+      expect(ark.created, [('D45AA182', arkSeed, true)]);
+      provider.dispose();
+    });
+
+    test('deleting a hot wallet deletes its Ark data', () async {
+      final hotWallet = _createSinglesigWalletListItem(isHotWallet: true);
+      final walletRepo =
+          FakeWalletRepository()
+            ..walletItems = [hotWallet]
+            ..hotWalletMetadata = [hotWallet.hotWalletMetadata!];
+      final ark = FakeArkWalletService(enabled: true, fingerprints: {'D45AA182'});
+      final provider = await _buildProvider(
+        walletRepo,
+        secretRepository: FakeHotWalletSecretRepository({'local_wallet_seed_1'}),
+        arkWalletService: ark,
+      );
+
+      await provider.deleteWallet(hotWallet.id);
+
+      expect(ark.deleted, ['d45aa182']);
+      expect(ark.fingerprints, isEmpty);
+      provider.dispose();
+    });
+
+    test('converting a hot wallet to watch-only deletes its Ark data', () async {
+      final existingHotWallet = _createSinglesigWalletListItem(name: 'Hot Wallet', isHotWallet: true);
+      final walletRepo =
+          FakeWalletRepository()
+            ..walletItems = [existingHotWallet]
+            ..hotWalletMetadata = [existingHotWallet.hotWalletMetadata!]
+            ..convertHotWalletResult = _createSinglesigWalletListItem(name: 'Watch-only Wallet');
+      final ark = FakeArkWalletService(enabled: true, fingerprints: {'D45AA182'});
+      final provider = await _buildProvider(
+        walletRepo,
+        secretRepository: FakeHotWalletSecretRepository({existingHotWallet.hotWalletMetadata!.secureStorageKey}),
+        arkWalletService: ark,
+      );
+
+      final duplicateResult = await provider.syncFromCoconutVault(
+        _createSinglesigWatchOnlyWallet(name: 'Watch-only Wallet'),
+      );
+      await provider.confirmWatchOnlyWalletAddition(duplicateResult, removeExistingHotWallet: true);
+
+      expect(ark.deleted, ['d45aa182']);
+      provider.dispose();
+    });
+
+    test('startup reconciliation removes Ark data of incomplete and missing hot wallets', () async {
+      final activeWallet = _createSinglesigWalletListItem(id: 1, isHotWallet: true);
+      final walletRepo =
+          FakeWalletRepository()
+            ..walletItems = [activeWallet]
+            ..hotWalletMetadata = [
+              activeWallet.hotWalletMetadata!,
+              HotWalletMetadata(
+                walletId: 2,
+                secureStorageKey: 'local_wallet_seed_2',
+                masterFingerprint: 'CAFEBABE',
+                derivationPath: "m/84'/1'/0'",
+                accountIndex: 0,
+                backupVerified: false,
+                enterPassphraseWhenSigning: false,
+                createdAt: DateTime.utc(2026, 10, 19),
+                lifecycleState: HotWalletLifecycleState.creating,
+              ),
+            ];
+      final ark = FakeArkWalletService(enabled: true, fingerprints: {'D45AA182', 'CAFEBABE', 'DEADBEEF'});
+      final provider = await _buildProvider(
+        walletRepo,
+        secretRepository: FakeHotWalletSecretRepository({'local_wallet_seed_1', 'local_wallet_seed_2'}),
+        arkWalletService: ark,
+      );
+
+      expect(ark.deleted, containsAll(['cafebabe', 'deadbeef']));
+      expect(ark.fingerprints, {'d45aa182'});
       provider.dispose();
     });
   });

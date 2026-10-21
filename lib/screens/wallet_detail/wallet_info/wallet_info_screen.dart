@@ -49,6 +49,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 import 'package:loader_overlay/loader_overlay.dart';
 import 'package:coconut_wallet/services/analytics_service.dart';
+import 'package:coconut_wallet/services/ark/ark_wallet_service.dart';
+import 'package:coconut_wallet/utils/logger.dart';
 import 'package:provider/provider.dart';
 
 const String kEntryPointWalletList = AppRouteNames.walletList;
@@ -770,7 +772,11 @@ class _WalletInfoScreenState extends State<WalletInfoScreen> {
   }
 
   Future<void> _showDeleteWalletDialog(WalletInfoViewModel viewModel) async {
-    final shouldConfirmBackup = viewModel.walletItemBase.hasLocalKey && viewModel.walletBalance.total > 0;
+    final hotWalletMetadata = viewModel.walletItemBase.hotWalletMetadata;
+    final shouldConfirmBackup =
+        hotWalletMetadata != null &&
+        (viewModel.walletBalance.total > 0 || await _arkMayHoldFunds(hotWalletMetadata.masterFingerprint));
+    if (!mounted) return;
     final shouldDelete = await showDialog<bool>(
       context: context,
       builder: (dialogContext) {
@@ -796,6 +802,15 @@ class _WalletInfoScreenState extends State<WalletInfoScreen> {
     }
 
     _handleAuthFlow(onComplete: () => _deleteWalletAndGoToEntryPoint(viewModel));
+  }
+
+  Future<bool> _arkMayHoldFunds(String fingerprint) async {
+    try {
+      return await ArkWalletService().mayHoldFunds(fingerprint);
+    } catch (error) {
+      Logger.error('Failed to check the Ark balance before deletion: $error');
+      return true;
+    }
   }
 
   Future<bool?> _showBackupBeforeDeleteDialog(WalletInfoViewModel viewModel) {

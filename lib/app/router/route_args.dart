@@ -29,6 +29,11 @@ class WalletDetailRouteArgs {
   const WalletDetailRouteArgs({required this.id, required this.entryPoint});
 }
 
+class ArkWalletRouteArgs {
+  final int id;
+  const ArkWalletRouteArgs({required this.id});
+}
+
 class UtxoOrganizerRouteArgs {
   final int id;
   const UtxoOrganizerRouteArgs({required this.id});

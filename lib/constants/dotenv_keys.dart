@@ -6,6 +6,10 @@ class DotenvKeys {
   static const String mempoolUrl = 'MEMPOOL_URL';
   static const String electrumServer = 'ELECTRUM_SERVER';
 
+  // Ark (bark). The Ark feature is enabled only when ARK_SERVER_URL is set.
+  static const String arkServerUrl = 'ARK_SERVER_URL';
+  static const String arkEsploraUrl = 'ARK_ESPLORA_URL';
+
   // Firebase
   static const String firebaseApiKeyAndroid = 'FIREBASE_API_KEY_ANDROID';
   static const String firebaseAppIdAndroid = 'FIREBASE_APP_ID_ANDROID';

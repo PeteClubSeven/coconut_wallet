@@ -74,6 +74,9 @@ class AppBootstrap {
     if (electrumServer != null && electrumServer.isNotEmpty) {
       DefaultElectrumServer.regtestOverride = ElectrumServer.fromUrl(electrumServer);
     }
+
+    CoconutWalletApp.kArkServerUrl = dotenv.env[DotenvKeys.arkServerUrl] ?? '';
+    CoconutWalletApp.kArkEsploraUrl = dotenv.env[DotenvKeys.arkEsploraUrl] ?? '';
   }
 
   static Future<void> _initializeFirebase() async {

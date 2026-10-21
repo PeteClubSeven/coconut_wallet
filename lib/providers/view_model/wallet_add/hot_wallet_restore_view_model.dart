@@ -7,6 +7,7 @@ import 'package:coconut_wallet/model/wallet/singlesig_wallet_item.dart';
 import 'package:coconut_wallet/model/wallet/watch_only_wallet.dart';
 import 'package:coconut_wallet/providers/wallet_provider.dart';
 import 'package:coconut_wallet/repository/secure_storage/hot_wallet_secret_repository.dart';
+import 'package:coconut_wallet/services/ark/ark_wallet_service.dart';
 import 'package:coconut_wallet/utils/nfkd_util.dart';
 import 'package:flutter/foundation.dart';
 
@@ -338,6 +339,8 @@ class HotWalletRestoreViewModel extends ChangeNotifier {
             enterPassphraseWhenSigning: enterPassphraseWhenSigning,
             createdAt: DateTime.now(),
             watchOnlyWalletIdToConvert: watchOnlyWalletIdToConvert,
+            arkSeedHex: await ArkWalletService().seedForHotWallet(mnemonic, passphrase),
+            restoreArk: true,
           );
         } catch (_) {
           secretCleanupHandledUnderLock = true;

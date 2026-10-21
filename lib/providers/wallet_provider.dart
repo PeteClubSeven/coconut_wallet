@@ -24,6 +24,7 @@ import 'package:coconut_wallet/repository/realm/utxo_repository.dart';
 import 'package:coconut_wallet/repository/realm/wallet_repository.dart';
 import 'package:coconut_wallet/repository/secure_storage/hot_wallet_secret_repository.dart';
 import 'package:coconut_wallet/repository/shared_preference/shared_prefs_repository.dart';
+import 'package:coconut_wallet/services/ark/ark_wallet_service.dart';
 import 'package:coconut_wallet/services/hardware_wallet/trezor_device.dart';
 import 'package:coconut_wallet/utils/migration/taproot_older_to_after_migration.dart';
 import 'package:coconut_wallet/services/model/response/block_timestamp.dart';
@@ -51,6 +52,7 @@ class WalletProvider extends ChangeNotifier {
   final HotWalletSecretRepository _hotWalletSecretRepository;
   final SharedPrefsRepository _sharedPrefsRepository;
   final HotWalletLifecycleLock _hotWalletLifecycleLock;
+  final ArkWalletService _arkWalletService;
   final SharedPrefsRepository _sharedPrefs = SharedPrefsRepository();
   final Set<int> _walletIdsWithUnacknowledgedBackupUpdate = <int>{};
 
@@ -78,10 +80,12 @@ class WalletProvider extends ChangeNotifier {
     HotWalletSecretRepository? hotWalletSecretRepository,
     SharedPrefsRepository? sharedPrefsRepository,
     HotWalletLifecycleLock? hotWalletLifecycleLock,
+    ArkWalletService? arkWalletService,
   }) : _saveWalletCount = saveWalletCount,
        _hotWalletSecretRepository = hotWalletSecretRepository ?? HotWalletSecretRepository(),
        _sharedPrefsRepository = sharedPrefsRepository ?? SharedPrefsRepository(),
-       _hotWalletLifecycleLock = hotWalletLifecycleLock ?? HotWalletLifecycleLock() {
+       _hotWalletLifecycleLock = hotWalletLifecycleLock ?? HotWalletLifecycleLock(),
+       _arkWalletService = arkWalletService ?? ArkWalletService() {
     // ValueNotifier들 초기화
     walletLoadStateNotifier = ValueNotifier(_walletLoadState);
     walletItemListNotifier = ValueNotifier(_walletItemList);
@@ -206,6 +210,7 @@ class WalletProvider extends ChangeNotifier {
           }
           await _deleteHotWalletSecretIgnoringFailure(metadata.secureStorageKey);
           indexedKeys?.remove(metadata.secureStorageKey);
+          await _deleteArkWalletIgnoringFailure(metadata.masterFingerprint);
           await _removeWalletPreferencesIgnoringFailure(metadata.walletId);
           walletListChanged = true;
           break;
@@ -237,8 +242,11 @@ class WalletProvider extends ChangeNotifier {
       }
     }
 
-    final referencedKeys =
-        _walletRepository.getHotWalletMetadataList().map((metadata) => metadata.secureStorageKey).toSet();
+    final remainingMetadata = _walletRepository.getHotWalletMetadataList();
+    final referencedKeys = remainingMetadata.map((metadata) => metadata.secureStorageKey).toSet();
+    await _cleanupOrphanArkWalletsIgnoringFailure(
+      remainingMetadata.map((metadata) => metadata.masterFingerprint).toSet(),
+    );
     if (indexedKeys != null) {
       for (final storageKey in indexedKeys.where((key) => !referencedKeys.contains(key))) {
         await _deleteHotWalletSecretIgnoringFailure(storageKey);
@@ -271,6 +279,36 @@ class WalletProvider extends ChangeNotifier {
       await _hotWalletSecretRepository.delete(storageKey);
     } catch (error) {
       Logger.error('Failed to delete hot wallet secret: $error');
+    }
+  }
+
+  Future<void> _createArkWallet(String fingerprint, String? seedHex, {required bool restore}) async {
+    if (!_arkWalletService.isEnabled) return;
+    if (seedHex == null) {
+      throw ArgumentError('An Ark seed is required to add a hot wallet while Ark is enabled');
+    }
+    await _arkWalletService.create(fingerprint, seedHex, restore: restore);
+  }
+
+  Future<void> _deleteArkWalletIgnoringFailure(String fingerprint) async {
+    try {
+      await _arkWalletService.delete(fingerprint);
+    } catch (error) {
+      Logger.error('Failed to delete Ark wallet: $error');
+    }
+  }
+
+  /// Removes Ark wallet data whose hot wallet no longer exists.
+  Future<void> _cleanupOrphanArkWalletsIgnoringFailure(Set<String> hotWalletFingerprints) async {
+    try {
+      final known = hotWalletFingerprints.map((fp) => fp.toLowerCase()).toSet();
+      for (final fingerprint in await _arkWalletService.listFingerprints()) {
+        if (!known.contains(fingerprint.toLowerCase())) {
+          await _deleteArkWalletIgnoringFailure(fingerprint);
+        }
+      }
+    } catch (error) {
+      Logger.error('Failed to clean orphan Ark wallets: $error');
     }
   }
 
@@ -580,6 +618,7 @@ class WalletProvider extends ChangeNotifier {
           watchOnlyWallet,
         );
         await _deleteHotWalletSecretIgnoringFailure(hotWalletMetadata.secureStorageKey);
+        await _deleteArkWalletIgnoringFailure(hotWalletMetadata.masterFingerprint);
 
         final targetIndex = _walletItemList.indexWhere((item) => item.id == existingHotWalletId);
         if (targetIndex == -1) {
@@ -612,6 +651,9 @@ class WalletProvider extends ChangeNotifier {
   }
 
   /// 동일 descriptor의 Watch-only 지갑이 있어도 별도 지갑으로 생성한다.
+  ///
+  /// When Ark is enabled, the hot wallet's Ark wallet is created as part of the same operation
+  /// from [arkSeedHex] (see [deriveArkSeedHex]); [restoreArk] runs bark's seed recovery.
   Future<SinglesigWalletItem> addHotWallet(
     WatchOnlyWallet wallet, {
     required String secureStorageKey,
@@ -619,6 +661,8 @@ class WalletProvider extends ChangeNotifier {
     required bool enterPassphraseWhenSigning,
     required DateTime createdAt,
     int? watchOnlyWalletIdToConvert,
+    String? arkSeedHex,
+    bool restoreArk = false,
   }) {
     return _hotWalletLifecycleLock.synchronized(
       () => _addHotWallet(
@@ -628,6 +672,8 @@ class WalletProvider extends ChangeNotifier {
         enterPassphraseWhenSigning: enterPassphraseWhenSigning,
         createdAt: createdAt,
         watchOnlyWalletIdToConvert: watchOnlyWalletIdToConvert,
+        arkSeedHex: arkSeedHex,
+        restoreArk: restoreArk,
       ),
     );
   }
@@ -639,6 +685,8 @@ class WalletProvider extends ChangeNotifier {
     required bool enterPassphraseWhenSigning,
     required DateTime createdAt,
     int? watchOnlyWalletIdToConvert,
+    String? arkSeedHex,
+    required bool restoreArk,
   }) async {
     if (wallet.walletType != WalletType.singleSignature) {
       throw ArgumentError.value(wallet.walletType, 'wallet.walletType', 'Hot wallet must be single-signature');
@@ -647,6 +695,7 @@ class WalletProvider extends ChangeNotifier {
         _walletRepository.containsHotWalletDescriptor(wallet.descriptor)) {
       throw StateError('The hot wallet has already been added');
     }
+    final arkFingerprint = SingleSignatureWallet.fromDescriptor(wallet.descriptor).keyStore.masterFingerprint;
 
     if (watchOnlyWalletIdToConvert != null) {
       final conversionTargetIndex = _walletItemList.indexWhere((item) => item.id == watchOnlyWalletIdToConvert);
@@ -658,6 +707,7 @@ class WalletProvider extends ChangeNotifier {
 
       final SinglesigWalletItem convertedWallet;
       try {
+        await _createArkWallet(arkFingerprint, arkSeedHex, restore: restoreArk);
         convertedWallet = await _walletRepository.convertWatchOnlyToHotWallet(
           watchOnlyWalletIdToConvert,
           expectedDescriptor: wallet.descriptor,
@@ -670,6 +720,7 @@ class WalletProvider extends ChangeNotifier {
         // convertWatchOnlyToHotWallet은 단일 Realm 트랜잭션이므로 실패 시
         // Realm에는 아무 것도 남지 않는다. 호출 전에 이미 저장된 secret만 정리한다.
         await _deleteHotWalletSecretIgnoringFailure(secureStorageKey);
+        await _deleteArkWalletIgnoringFailure(arkFingerprint);
         rethrow;
       }
 
@@ -707,6 +758,7 @@ class WalletProvider extends ChangeNotifier {
         lifecycleState: HotWalletLifecycleState.creating,
       );
       await _addressRepository.ensureAddressesInit(walletItemBase: creatingWallet);
+      await _createArkWallet(arkFingerprint, arkSeedHex, restore: restoreArk);
       await _walletRepository.updateHotWalletLifecycleState(creatingWallet.id, HotWalletLifecycleState.active);
 
       final activeWallets = await _fetchWalletListFromDB();
@@ -731,6 +783,7 @@ class WalletProvider extends ChangeNotifier {
           Logger.error('Failed to roll back hot wallet ${creatingWallet.id}: $rollbackError');
         }
         await _deleteHotWalletSecretIgnoringFailure(secureStorageKey);
+        await _deleteArkWalletIgnoringFailure(arkFingerprint);
         await _removeWalletPreferencesIgnoringFailure(creatingWallet.id);
         try {
           _setWalletItemList(await _fetchWalletListFromDB());
@@ -927,6 +980,9 @@ class WalletProvider extends ChangeNotifier {
     await _walletRepository.deleteWallet(walletId);
     if (secretStorageKey != null) {
       await _deleteHotWalletSecretIgnoringFailure(secretStorageKey);
+    }
+    if (hotWalletMetadata != null) {
+      await _deleteArkWalletIgnoringFailure(hotWalletMetadata.masterFingerprint);
     }
     _setWalletItemList(await _fetchWalletListFromDB());
     await _saveWalletCount(_walletItemList.length);

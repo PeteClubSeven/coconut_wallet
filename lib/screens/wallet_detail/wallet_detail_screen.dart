@@ -30,6 +30,7 @@ import 'package:coconut_wallet/providers/wallet_provider.dart';
 import 'package:coconut_wallet/screens/settings/app_settings/app_settings_screen.dart';
 import 'package:coconut_wallet/screens/wallet_detail/wallet_detail_faucet_request_bottom_sheet.dart';
 import 'package:coconut_wallet/services/analytics_service.dart';
+import 'package:coconut_wallet/services/ark/ark_wallet_service.dart';
 import 'package:coconut_wallet/ui/coconut/coconut_app_bar.dart';
 import 'package:coconut_wallet/ui/coconut/coconut_overlays.dart';
 import 'package:coconut_wallet/utils/amimation_util.dart';
@@ -165,6 +166,10 @@ class _WalletDetailScreenState extends State<WalletDetailScreen> with TickerProv
                           _buildRecentTransactions(),
                           CoconutLayout.spacing_500h,
                           _buildUtxoSection(),
+                          if (_viewModel.wallet.hasLocalKey && ArkWalletService().isEnabled) ...[
+                            CoconutLayout.spacing_500h,
+                            _buildArkSection(),
+                          ],
                         ])
                           Padding(padding: const EdgeInsets.symmetric(horizontal: 16), child: child),
                       ],
@@ -519,6 +524,41 @@ class _WalletDetailScreenState extends State<WalletDetailScreen> with TickerProv
           ],
         );
       },
+    );
+  }
+
+  Widget _buildArkSection() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text('Ark', style: CoconutTypography.body2_14_Bold.setColor(context.coconutColors.primaryText)),
+        CoconutLayout.spacing_200h,
+        Container(
+          decoration: BoxDecoration(
+            color: context.coconutColors.surface,
+            borderRadius: BorderRadius.circular(CoconutStyles.radius_200),
+          ),
+          child: Row(
+            children: [
+              Expanded(
+                child: _UtxoAction(
+                  iconPath: FeatureWalletIconPath.wallet,
+                  label: 'Ark wallet',
+                  description: 'Balance and address of this wallet on Ark',
+                  iconPadding: const EdgeInsets.all(2),
+                  isEnabled: true,
+                  onTap:
+                      () => Navigator.pushNamed(
+                        context,
+                        AppRouteNames.arkWallet,
+                        arguments: ArkWalletRouteArgs(id: widget.id),
+                      ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ],
     );
   }
 

@@ -28,6 +28,10 @@ enum AppEntryFlow { splash, main, pinCheck }
 class CoconutWalletApp extends StatefulWidget {
   /// Regtest mempool (block explorer, mempool API and fee estimates)
   static String kMempoolHost = DEFAULT_EXPLORER_URL_REGTEST;
+
+  /// Ark server and the Esplora API bark uses as its chain source. Empty disables Ark.
+  static String kArkServerUrl = '';
+  static String kArkEsploraUrl = '';
   static late String kFaucetHost;
   static late NetworkType kNetworkType;
   static late bool kIsFirebaseAnalyticsUsed;
