@@ -13,6 +13,7 @@ class UtxoHeaderDelegate extends SliverPersistentHeaderDelegate {
     required this.onBackPressed,
     required this.onTabChanged,
     required this.refreshButton,
+    this.balanceLabel,
   });
 
   final double topPadding;
@@ -23,6 +24,9 @@ class UtxoHeaderDelegate extends SliverPersistentHeaderDelegate {
   final VoidCallback onBackPressed;
   final ValueChanged<int> onTabChanged;
   final Widget refreshButton;
+
+  /// The label above the amount; "Total Balance" when null.
+  final String? balanceLabel;
 
   @override
   double get minExtent => topPadding + 165;
@@ -66,7 +70,7 @@ class UtxoHeaderDelegate extends SliverPersistentHeaderDelegate {
                 child: Transform.translate(
                   offset: Offset(0, -8 * eased),
                   child: Text(
-                    t.utxo_list_screen.total_balance,
+                    balanceLabel ?? t.utxo_list_screen.total_balance,
                     style: CoconutTypography.body2_14_Bold.setColor(colors.secondaryText),
                   ),
                 ),
@@ -120,6 +124,7 @@ class UtxoHeaderDelegate extends SliverPersistentHeaderDelegate {
       fiatPrice != oldDelegate.fiatPrice ||
       bottomBar != oldDelegate.bottomBar ||
       refreshButton != oldDelegate.refreshButton ||
+      balanceLabel != oldDelegate.balanceLabel ||
       isOverviewSelected != oldDelegate.isOverviewSelected ||
       topPadding != oldDelegate.topPadding;
 }
