@@ -82,6 +82,7 @@ class SendOptionsScreen extends StatefulWidget {
 class _SendOptionsScreenState extends State<SendOptionsScreen> {
   late final SendOptionsViewModel _vm;
   late final ArkProvider _arkProvider;
+  late final String _walletName;
   late BitcoinUnit _unit;
 
   /// The board fee for the amount the board output gets, once estimated.
@@ -96,6 +97,7 @@ class _SendOptionsScreenState extends State<SendOptionsScreen> {
     super.initState();
     final walletProvider = context.read<WalletProvider>();
     _arkProvider = context.read<ArkProvider>();
+    _walletName = walletProvider.getWalletById(widget.id).name;
     _unit = context.read<PreferenceProvider>().currentUnit;
     _vm = SendOptionsViewModel(
       recipients: [
@@ -277,7 +279,8 @@ class _SendOptionsScreenState extends State<SendOptionsScreen> {
           backgroundColor: colors.background,
           appBar: CoconutAppBar.build(
             context: context,
-            title: move == null ? t.ark.send.pay_with : t.ark.move.screen_title(destination: moveEndpointText(move.to)),
+            // The wallet's name, as on step 1 and the send screen; a move says where it goes.
+            title: move == null ? _walletName : t.ark.move.screen_title(destination: moveEndpointText(move.to)),
             backgroundColor: colors.background,
           ),
           body: GestureDetector(
@@ -303,7 +306,7 @@ class _SendOptionsScreenState extends State<SendOptionsScreen> {
                             CoconutLayout.spacing_500h,
                             _buildRecipients(),
                             CoconutLayout.spacing_500h,
-                            ArkSectionTitle(t.ark.send.pay_with),
+                            ArkSectionTitle(t.ark.send.send_with),
                             if (onchainOnlyNote != null) ...[
                               Text(onchainOnlyNote, style: CoconutTypography.body3_12.setColor(colors.secondaryText)),
                               CoconutLayout.spacing_200h,
@@ -319,7 +322,7 @@ class _SendOptionsScreenState extends State<SendOptionsScreen> {
                   if (!isEditingFeeRate)
                     FixedBottomButton(
                       onButtonClicked: isOnchain ? _nextOnchain : _payFromArk,
-                      text: isOnchain ? t.next : (move == null ? t.ark.send.pay : t.ark.move.move),
+                      text: isOnchain ? t.next : (move == null ? t.send : t.ark.move.move),
                       isActive: _vm.canProceed,
                     ),
                 ],
@@ -437,13 +440,7 @@ class _SendOptionsScreenState extends State<SendOptionsScreen> {
               children: [
                 Text(sendOptionTitle(option.kind), style: CoconutTypography.body2_14_Bold.setColor(colors.primaryText)),
                 CoconutLayout.spacing_50h,
-                Text(
-                  t.ark.send.source_balance(
-                    source: sendOptionSource(option.kind),
-                    amount: formatSats(_unit, available),
-                  ),
-                  style: CoconutTypography.body3_12.setColor(colors.secondaryText),
-                ),
+                Text(formatSats(_unit, available), style: CoconutTypography.body3_12.setColor(colors.secondaryText)),
               ],
             ),
           ),

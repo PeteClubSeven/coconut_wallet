@@ -2,9 +2,13 @@ import 'dart:async';
 import 'package:coconut_wallet/model/ark/ark_lightning_invoice.dart';
 import 'package:coconut_wallet/model/ark/ark_movement.dart';
 import 'package:coconut_wallet/model/ark/ark_snapshot.dart';
+import 'package:coconut_wallet/enums/network_enums.dart';
+import 'package:coconut_wallet/model/node/wallet_update_info.dart';
 import 'package:coconut_wallet/providers/ark_provider.dart';
+import 'package:coconut_wallet/providers/node_provider/node_provider.dart';
+import 'package:coconut_wallet/providers/transaction_provider.dart';
+import 'package:coconut_wallet/screens/wallet_detail/receive_complete_screen.dart';
 import 'package:coconut_wallet/screens/ark/ark_unlock_flow.dart';
-import 'package:coconut_wallet/ui/coconut/coconut_overlays.dart';
 import 'package:coconut_wallet/widgets/common/buttons/copy_text_container.dart';
 import 'package:coconut_wallet/app/router/app_route_names.dart';
 import 'package:coconut_wallet/app/router/route_args.dart';
@@ -62,6 +66,12 @@ class _ReceiveAddressScreenState extends State<ReceiveAddressScreen> {
   String? _invoiceError;
   int? _fastSyncWalletId;
   final Set<int> _announcedMovementIds = {};
+
+  // On-chain payments: the selected wallet's transactions seen so far, checked after each sync.
+  late final TransactionProvider _transactionProvider;
+  StreamSubscription<WalletUpdateInfo>? _walletUpdateSubscription;
+  final Set<String> _seenTxHashes = {};
+  bool _isShowingReceived = false;
 
   String get derivationPath {
     if (_receiveAddress == null) return "";
@@ -123,30 +133,34 @@ class _ReceiveAddressScreenState extends State<ReceiveAddressScreen> {
 
     final walletProvider = context.read<WalletProvider>();
     _arkProvider = context.read<ArkProvider>();
+    _transactionProvider = context.read<TransactionProvider>();
     _selectedWalletItem = walletProvider.walletItemList.where((e) => e.id == widget.id).first;
     _receiveAddress = walletProvider.getReceiveAddress(_selectedWalletItem!.id);
     _walletCount = walletProvider.walletItemList.length;
     _arkProvider.cacheRevision.addListener(_onArkCacheChanged);
-    _onArkWalletSelected();
+    _onWalletSelected();
   }
 
   @override
   void dispose() {
+    _walletUpdateSubscription?.cancel();
     _arkProvider.cacheRevision.removeListener(_onArkCacheChanged);
     _stopFastSync();
     AppGuard.enablePrivacyScreen();
     super.dispose();
   }
 
-  /// While this screen is open, a hot wallet with Ark syncs every few seconds so Ark and
-  /// Lightning payments (which bark claims during sync) show up promptly.
-  void _onArkWalletSelected() {
+  /// While this screen is open, payments to the selected wallet open the Received screen. A hot
+  /// wallet with Ark syncs every few seconds so Ark and Lightning payments (which bark claims
+  /// during sync) show up promptly; on-chain ones show once Coconut's node sync has them.
+  void _onWalletSelected() {
     _stopFastSync();
     _invoice = null;
     _invoiceError = null;
     _announcedMovementIds
       ..clear()
       ..addAll(_arkSnapshot?.movements.map((movement) => movement.id) ?? const []);
+    _watchOnchain();
     if (!_isArkWallet) return;
     _fastSyncWalletId = selectedWalletId;
     _arkProvider.setFastSync(selectedWalletId, true);
@@ -166,17 +180,48 @@ class _ReceiveAddressScreenState extends State<ReceiveAddressScreen> {
       if (_announcedMovementIds.contains(movement.id)) continue;
       if (movement.status != ArkMovementStatus.successful || movement.effectiveBalanceSats <= 0) continue;
       _announcedMovementIds.add(movement.id);
-      final rail = movement.kind == ArkMovementKind.lightningReceive ? t.ark.rail.lightning : t.ark.rail.ark;
-      final unit = context.read<PreferenceProvider>().currentUnit;
-      CoconutToast.showBottomToast(
-        context: context,
-        text: t.ark.receive.received_toast(
-          amount: unit.displayBitcoinAmount(movement.effectiveBalanceSats, withUnit: true),
-          rail: rail,
-        ),
-      );
+      unawaited(_showReceived(movement.effectiveBalanceSats));
     }
     setState(() {});
+  }
+
+  /// Notes the selected wallet's transactions so far, then looks for new incoming ones after each of
+  /// its syncs.
+  void _watchOnchain() {
+    _walletUpdateSubscription?.cancel();
+    final walletId = selectedWalletId;
+    _seenTxHashes
+      ..clear()
+      ..addAll(_transactionProvider.getTransactionRecordList(walletId).map((tx) => tx.transactionHash));
+    _walletUpdateSubscription = context.read<NodeProvider>().getWalletStateStream(walletId).listen((update) {
+      if (update.transaction == WalletSyncState.completed) _onOnchainSynced(walletId);
+    });
+  }
+
+  void _onOnchainSynced(int walletId) {
+    if (!mounted || walletId != selectedWalletId) return;
+    for (final tx in _transactionProvider.getTransactionRecordList(walletId)) {
+      if (!_seenTxHashes.add(tx.transactionHash)) continue;
+      if (tx.transactionType != TransactionType.received || tx.amount <= 0) continue;
+      unawaited(_showReceived(tx.amount, isUnconfirmed: tx.blockHeight == 0));
+    }
+  }
+
+  /// The first payment to arrive takes over with the Received screen, whose Confirm closes this
+  /// screen too; any others meanwhile are in the history.
+  Future<void> _showReceived(int amountSats, {bool isUnconfirmed = false}) async {
+    if (_isShowingReceived || !mounted) return;
+    _isShowingReceived = true;
+    final unit = context.read<PreferenceProvider>().currentUnit;
+    await Navigator.push(
+      context,
+      PageRouteBuilder(
+        pageBuilder:
+            (_, __, ___) => ReceiveCompleteScreen(amountSats: amountSats, unit: unit, isUnconfirmed: isUnconfirmed),
+        transitionsBuilder: (_, animation, __, child) => FadeTransition(opacity: animation, child: child),
+      ),
+    );
+    if (mounted) Navigator.pop(context);
   }
 
   /// Opens the Ark wallet for the session if needed, then makes an invoice for the entered amount.
@@ -472,7 +517,7 @@ class _ReceiveAddressScreenState extends State<ReceiveAddressScreen> {
               final walletProvider = context.read<WalletProvider>();
               _selectedWalletItem = walletProvider.walletItemList.firstWhere((e) => e.id == id);
               _receiveAddress = walletProvider.getReceiveAddress(_selectedWalletItem!.id);
-              _onArkWalletSelected();
+              _onWalletSelected();
               setState(() {});
               Navigator.pop(context);
               if (_enteredReceiveAmountSats != null) unawaited(_createInvoice());

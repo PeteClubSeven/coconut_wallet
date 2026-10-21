@@ -75,6 +75,12 @@ class TransactionProvider extends ChangeNotifier {
     return false;
   }
 
+  /// [walletId]'s transactions, without making them the shared [txList] (that belongs to the
+  /// wallet screen on display).
+  List<TransactionRecord> getTransactionRecordList(int walletId) {
+    return _transactionRepository.getTransactionRecordList(walletId);
+  }
+
   TransactionRecord? getTransactionRecord(int walletId, String txHash) {
     return _transactionRepository.getTransactionRecord(walletId, txHash);
   }

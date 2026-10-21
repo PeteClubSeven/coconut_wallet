@@ -13,6 +13,7 @@ import 'package:coconut_lib/coconut_lib.dart';
 import 'package:coconut_wallet/app/router/app_route_names.dart';
 import 'package:coconut_wallet/app/router/route_args.dart';
 import 'package:coconut_wallet/config/number_format_config.dart';
+import 'package:coconut_wallet/constants/app_language.dart';
 import 'package:coconut_wallet/constants/icon_path.dart';
 import 'package:coconut_wallet/constants/lottie_path.dart';
 import 'package:coconut_wallet/design_system/context/coconut_theme_context_extension.dart';
@@ -104,7 +105,7 @@ class _RecipientRow {
 }
 
 class _SendRecipientScreenState extends State<SendRecipientScreen> {
-  static const double _pageHeight = 200;
+  static const double _pageHeight = 232;
   static const double _amountHeight = 34;
 
   final List<_RecipientRow> _rows = [];
@@ -308,19 +309,18 @@ class _SendRecipientScreenState extends State<SendRecipientScreen> {
     }
   }
 
-  // --- Balance boxes: everything in that balance ---
+  // --- Send All: everything in one balance ---
 
-  /// Whether the current row may take everything in [source] (the box is enabled).
-  bool _canUseMax(SendMaxSource source, SendRecipientCheck? check, {required int arkAvailable}) {
-    final row = _currentRow;
-    if (row == null || row.amountLocked) return false;
-    final request = check?.request;
+  /// Whether row [index] may take everything in [source] (its Send All pill is enabled).
+  bool _canUseMax(int index, SendMaxSource source, SendRecipientCheck check, {required int arkAvailable}) {
+    if (_rows[index].amountLocked) return false;
+    final request = check.request;
     switch (source) {
       case SendMaxSource.onchain:
         if (_funding == SendFunding.ark || _onchainAvailableSats <= 0) return false;
         // On-chain coins pay Bitcoin addresses only, and everything left goes to the last row.
         if (request != null && request.bitcoinAddress == null) return false;
-        return _page == _rows.length - 1;
+        return index == _rows.length - 1;
       case SendMaxSource.ark:
         if (_funding == SendFunding.onchain || arkAvailable <= 0 || _rows.length > 1) return false;
         if (!_isMove && !context.read<ArkProvider>().supportsArkById(widget.id)) return false;
@@ -328,9 +328,9 @@ class _SendRecipientScreenState extends State<SendRecipientScreen> {
     }
   }
 
-  void _toggleMax(SendMaxSource source) {
-    final row = _currentRow;
-    if (row == null) return;
+  /// Send All on [source], or cancels it; the other Send All switches straight over.
+  void _toggleMax(int index, SendMaxSource source) {
+    final row = _rows[index];
     _clearFocus();
     setState(() {
       if (row.maxSource == source) {
@@ -505,12 +505,15 @@ class _SendRecipientScreenState extends State<SendRecipientScreen> {
                   ),
                   Padding(
                     padding: const EdgeInsets.symmetric(horizontal: 16),
-                    child: Column(children: [_buildBalances(check, arkAvailable: arkAvailable), _buildTooltips(check)]),
+                    child: Column(
+                      children: [if (_isMove) _buildSourceBalance(arkAvailable: arkAvailable), _buildTooltips(check)],
+                    ),
                   ),
                 ],
               ),
             ),
-            if (_amountFocusNode.hasFocus)
+            // Only over the keypad: Back can close it while the amount keeps its focus.
+            if (_amountFocusNode.hasFocus && keyboardHeight > 0)
               Positioned(left: 0, right: 0, bottom: keyboardHeight, child: _buildAmountKeyboardToolbar()),
             FixedBottomButton(
               onButtonClicked: _next,
@@ -543,27 +546,55 @@ class _SendRecipientScreenState extends State<SendRecipientScreen> {
     );
   }
 
-  /// What each balance has available, right under the recipients; tapping one sends everything in
-  /// it. A move shows only its source's.
-  Widget _buildBalances(SendRecipientList check, {required int arkAvailable}) {
-    final row = _currentRow;
-    final rowCheck = row == null ? null : check.checks[_page];
-    Widget box(SendMaxSource source, String label, int sats) => Expanded(
-      child: ArkBalanceBox(
-        label: label,
-        amount: _unit.displayBitcoinAmount(sats, withUnit: true),
-        onPressed: () => _toggleMax(source),
-        isEnabled: _canUseMax(source, rowCheck, arkAvailable: arkAvailable),
-        isSelected: row?.maxSource == source,
-      ),
-    );
+  /// A move's source balance, under its destination, so it's clear how much can move. (A send
+  /// shows none: its Send All pills fill the amount with a balance.)
+  Widget _buildSourceBalance({required int arkAvailable}) {
+    final isOffchain = _funding == SendFunding.ark;
     return Row(
       children: [
-        if (_funding != SendFunding.ark)
-          box(SendMaxSource.onchain, t.ark.send.available_onchain, _onchainAvailableSats),
-        if (_funding == SendFunding.any) CoconutLayout.spacing_200w,
-        if (_funding != SendFunding.onchain) box(SendMaxSource.ark, t.ark.send.available_ark, arkAvailable),
+        Expanded(
+          child: ArkBalanceBox(
+            label: isOffchain ? t.ark.send.available_offchain : t.ark.send.available_onchain,
+            amount: _unit.displayBitcoinAmount(isOffchain ? arkAvailable : _onchainAvailableSats, withUnit: true),
+          ),
+        ),
       ],
+    );
+  }
+
+  /// The send screen's "Send All" pill, one per balance, on the last recipient as upstream: it
+  /// fills the amount with that balance and becomes "Cancel …". A move offers only its source's.
+  Widget _buildSendAllPills(int index, SendRecipientCheck check, {required int arkAvailable}) {
+    final row = _rows[index];
+    final isLast = index == _rows.length - 1;
+    final hasEnglishWordOrder = AppLanguage.fromCode(context.read<PreferenceProvider>().language).hasEnglishWordOrder;
+    Widget pill(SendMaxSource source, String text) => SendOptionPill(
+      iconPath: FeatureSettingsIconPath.broom,
+      label:
+          row.maxSource != source
+              ? text
+              : hasEnglishWordOrder
+              ? '${t.cancel} $text'
+              : '$text ${t.cancel}',
+      isEnabled: _canUseMax(index, source, check, arkAvailable: arkAvailable),
+      onPressed: () => _toggleMax(index, source),
+    );
+    return MediaQuery(
+      data: MediaQuery.of(context).copyWith(textScaler: const TextScaler.linear(1.0)),
+      child: IgnorePointer(
+        ignoring: !isLast,
+        child: Opacity(
+          opacity: isLast ? 1 : 0,
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              if (_funding != SendFunding.ark) pill(SendMaxSource.onchain, t.ark.send.send_all_onchain),
+              if (_funding == SendFunding.any) CoconutLayout.spacing_200w,
+              if (_funding != SendFunding.onchain) pill(SendMaxSource.ark, t.ark.send.send_all_offchain),
+            ],
+          ),
+        ),
+      ),
     );
   }
 
@@ -618,7 +649,9 @@ class _SendRecipientScreenState extends State<SendRecipientScreen> {
                   ),
                 ),
               ),
-              CoconutLayout.spacing_600h,
+              CoconutLayout.spacing_200h,
+              _buildSendAllPills(index, check, arkAvailable: arkAvailable),
+              CoconutLayout.spacing_500h,
               if (isMoveDestination) _buildMoveDestination() else ..._buildDestinationField(row, check),
             ],
           ),

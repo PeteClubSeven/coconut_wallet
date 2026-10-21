@@ -95,7 +95,7 @@ class _ArkPaymentScreenState extends State<ArkPaymentScreen> with SingleTickerPr
       if (_outcome != _Outcome.sending || !mounted) return; // already shown as pending
       _pendingTimer?.cancel();
       _lottie.stop();
-      await showArkError(context, t.ark.send.payment_failed, '$error');
+      await showArkError(context, t.ark.send.send_failed, '$error');
       if (mounted) Navigator.pop(context);
     }
   }

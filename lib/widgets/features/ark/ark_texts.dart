@@ -87,9 +87,6 @@ String sendOptionTitle(SendOptionKind kind) => switch (kind) {
   SendOptionKind.onchainViaArk => t.ark.option.onchain_via_ark,
 };
 
-String sendOptionSource(SendOptionKind kind) =>
-    kind == SendOptionKind.onchain ? t.ark.option.from_wallet : t.ark.option.from_ark;
-
 /// Why a way to pay can't be used now, if it can't.
 String? sendOptionProblemText(SendOptionStatus status) {
   final texts = t.ark.option_problem;

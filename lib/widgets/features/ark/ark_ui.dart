@@ -105,15 +105,7 @@ class ArkChip extends StatelessWidget {
 
 /// A small label over an amount in a rounded box, as the UTXO overview's availability chips.
 class ArkBalanceBox extends StatelessWidget {
-  const ArkBalanceBox({
-    super.key,
-    required this.label,
-    required this.amount,
-    this.backgroundColor,
-    this.onPressed,
-    this.isEnabled = true,
-    this.isSelected = false,
-  });
+  const ArkBalanceBox({super.key, required this.label, required this.amount, this.backgroundColor});
 
   final String label;
   final String amount;
@@ -121,20 +113,12 @@ class ArkBalanceBox extends StatelessWidget {
   /// Defaults to the surface colour.
   final Color? backgroundColor;
 
-  /// Makes the box a button (Send's balance boxes fill the amount with the balance).
-  final VoidCallback? onPressed;
-
-  /// A dimmed box that does nothing when tapped (that balance can't pay).
-  final bool isEnabled;
-
-  /// Outlined while its balance is what's being sent.
-  final bool isSelected;
-
   @override
   Widget build(BuildContext context) {
     final colors = context.coconutColors;
-    final content = Padding(
+    return Container(
       padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(color: backgroundColor ?? colors.surface, borderRadius: BorderRadius.circular(12)),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -144,30 +128,6 @@ class ArkBalanceBox extends StatelessWidget {
         ],
       ),
     );
-    final border = Border.all(color: isSelected ? colors.borderStrong : Colors.transparent);
-    final Widget box =
-        onPressed == null
-            ? Container(
-              decoration: BoxDecoration(
-                color: backgroundColor ?? colors.surface,
-                borderRadius: BorderRadius.circular(12),
-                border: border,
-              ),
-              child: content,
-            )
-            : ShrinkAnimationButton(
-              onPressed: isEnabled ? onPressed! : () {},
-              defaultColor: backgroundColor ?? colors.surface,
-              pressedOverlayColor: colors.surfacePressOverlay,
-              pressedOverlayOpacity: colors.surfacePressOverlayOpacity,
-              borderRadius: 12,
-              borderWidth: 0,
-              child: Container(
-                decoration: BoxDecoration(borderRadius: BorderRadius.circular(12), border: border),
-                child: content,
-              ),
-            );
-    return AnimatedOpacity(opacity: isEnabled ? 1 : 0.35, duration: const Duration(milliseconds: 150), child: box);
   }
 }
 
@@ -292,27 +252,22 @@ class ArkSelectableCard extends StatelessWidget {
 /// The small pill under the send screen's amount ("Send All"); a public copy of send_screen's
 /// private one.
 class SendOptionPill extends StatelessWidget {
-  const SendOptionPill({
-    super.key,
-    required this.label,
-    required this.onPressed,
-    this.iconPath,
-    this.isSelected = false,
-  });
+  const SendOptionPill({super.key, required this.label, required this.onPressed, this.iconPath, this.isEnabled = true});
 
   final String label;
   final VoidCallback onPressed;
   final String? iconPath;
-  final bool isSelected;
+
+  /// Dimmed and inert when it doesn't apply (e.g. Send All On-chain for an Ark address).
+  final bool isEnabled;
 
   @override
   Widget build(BuildContext context) {
     final colors = context.coconutColors;
-    final background = isSelected ? colors.brandAccentBackground : colors.surfaceButton;
-    final foreground = isSelected ? colors.brandAccentForeground : colors.primaryText;
-    return ShrinkAnimationButton(
+    final foreground = colors.primaryText;
+    final pill = ShrinkAnimationButton(
       onPressed: onPressed,
-      defaultColor: background,
+      defaultColor: colors.surfaceButton,
       pressedOverlayColor: colors.surface,
       pressedOverlayOpacity: 0.8,
       borderRadius: 4.0,
@@ -333,6 +288,10 @@ class SendOptionPill extends StatelessWidget {
           ],
         ),
       ),
+    );
+    return IgnorePointer(
+      ignoring: !isEnabled,
+      child: AnimatedOpacity(opacity: isEnabled ? 1 : 0.35, duration: const Duration(milliseconds: 150), child: pill),
     );
   }
 }
