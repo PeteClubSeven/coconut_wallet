@@ -75,6 +75,25 @@ void main() {
       expect(createArkMovement(status: ArkMovementStatus.failed, effectiveBalanceSats: 0).isVisibleInHistory, isFalse);
       expect(createArkMovement(status: ArkMovementStatus.failed, effectiveBalanceSats: -10).isVisibleInHistory, isTrue);
       expect(createArkMovement(status: ArkMovementStatus.pending, effectiveBalanceSats: 0).isVisibleInHistory, isTrue);
+      // A Lightning send the server refused to start: bark leaves it pending with nothing locked.
+      expect(
+        createArkMovement(
+          subsystemName: 'bark.lightning_send',
+          subsystemKind: 'send',
+          status: ArkMovementStatus.pending,
+          effectiveBalanceSats: 0,
+        ).isVisibleInHistory,
+        isFalse,
+      );
+      expect(
+        createArkMovement(
+          subsystemName: 'bark.lightning_send',
+          subsystemKind: 'send',
+          status: ArkMovementStatus.pending,
+          effectiveBalanceSats: -12048,
+        ).isVisibleInHistory,
+        isTrue,
+      );
     });
 
     test('timestamp prefers the completion time', () {

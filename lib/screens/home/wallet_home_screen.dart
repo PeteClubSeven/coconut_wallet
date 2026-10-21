@@ -1630,7 +1630,11 @@ class _WalletHomeScreenState extends State<WalletHomeScreen> with TickerProvider
         ArkActivity(:final time) => time.toLocal(),
       };
       final List<String> transactionTimeStamp = DateTimeUtil.formatTimestamp(txDate);
-      final String formattedAmount = currentUnit.formatAmountWithSign(activity.displayAmount, isPositive: isReceived);
+      // A zero amount (e.g. a free Ark refresh) takes no sign.
+      final String formattedAmount =
+          activity.displayAmount == 0
+              ? currentUnit.displayBitcoinAmount(0, withUnit: true)
+              : currentUnit.formatAmountWithSign(activity.displayAmount, isPositive: isReceived);
       final String iconSource = TransactionUtil.getStatusIconAsset(status);
       final datetimeTextColor = context.coconutColors.tertiaryText;
       final walletNameTextColor = context.coconutColors.secondaryText;

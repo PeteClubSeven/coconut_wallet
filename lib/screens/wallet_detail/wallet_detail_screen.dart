@@ -563,7 +563,7 @@ class _WalletDetailScreenState extends State<WalletDetailScreen> with TickerProv
                     child: _UtxoAction(
                       iconPath: CommonMenuIconPath.grid,
                       label: 'Overview',
-                      description: 'Ark balance and VTXOs',
+                      description: 'Balance and VTXOs',
                       iconPadding: const EdgeInsets.all(2),
                       onTap:
                           () => Navigator.pushNamed(
@@ -577,7 +577,7 @@ class _WalletDetailScreenState extends State<WalletDetailScreen> with TickerProv
                     child: _UtxoAction(
                       iconPath: CommonActionIconPath.rotate,
                       label: 'Refresh',
-                      description: 'Renew VTXOs before they expire',
+                      description: 'Renew VTXOs',
                       iconPadding: const EdgeInsets.all(2),
                       isEnabled: vtxoCount > 0,
                       onTap:
@@ -585,6 +585,21 @@ class _WalletDetailScreenState extends State<WalletDetailScreen> with TickerProv
                             context,
                             AppRouteNames.arkWallet,
                             arguments: ArkWalletRouteArgs(id: widget.id, startRefresh: true),
+                          ),
+                    ),
+                  ),
+                  Expanded(
+                    child: _UtxoAction(
+                      iconPath: FeatureTransactionIconPath.txSent,
+                      label: 'Pay',
+                      description: 'Ark or Lightning',
+                      iconPadding: const EdgeInsets.all(2),
+                      isEnabled: (arkProvider.balance(widget.id)?.spendable ?? 0) > 0,
+                      onTap:
+                          () => Navigator.pushNamed(
+                            context,
+                            AppRouteNames.arkSend,
+                            arguments: ArkSendRouteArgs(id: widget.id),
                           ),
                     ),
                   ),

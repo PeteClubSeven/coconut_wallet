@@ -168,7 +168,12 @@ class ArkMovement {
     return null;
   }
 
-  /// Failed or canceled movements that changed nothing are noise in a transaction list.
-  bool get isVisibleInHistory =>
-      !((status == ArkMovementStatus.failed || status == ArkMovementStatus.canceled) && effectiveBalanceSats == 0);
+  /// Movements that changed nothing are noise in a transaction list: failed or canceled ones, and
+  /// Lightning sends the server refused to start (bark 0.7.1 leaves those pending forever, with
+  /// nothing locked; a payment really in flight has its amount locked, so a non-zero balance).
+  bool get isVisibleInHistory {
+    if (effectiveBalanceSats != 0) return true;
+    if (status == ArkMovementStatus.failed || status == ArkMovementStatus.canceled) return false;
+    return !(kind == ArkMovementKind.lightningSend && status == ArkMovementStatus.pending);
+  }
 }

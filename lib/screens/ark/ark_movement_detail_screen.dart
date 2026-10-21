@@ -33,11 +33,36 @@ void openWalletActivityDetail(BuildContext context, int walletId, WalletActivity
 
 /// Details of one Ark movement (bark's history entry), from the cache. Strings are not localized
 /// yet (proof of concept).
-class ArkMovementDetailScreen extends StatelessWidget {
+class ArkMovementDetailScreen extends StatefulWidget {
   const ArkMovementDetailScreen({super.key, required this.id, required this.movementId});
 
   final int id;
   final int movementId;
+
+  @override
+  State<ArkMovementDetailScreen> createState() => _ArkMovementDetailScreenState();
+}
+
+class _ArkMovementDetailScreenState extends State<ArkMovementDetailScreen> {
+  late final ArkProvider _arkProvider;
+
+  int get id => widget.id;
+  int get movementId => widget.movementId;
+
+  // Syncs every few seconds while shown, so a payment that's still going (e.g. over Lightning)
+  // settles on screen.
+  @override
+  void initState() {
+    super.initState();
+    _arkProvider = context.read<ArkProvider>();
+    _arkProvider.setFastSync(id, true);
+  }
+
+  @override
+  void dispose() {
+    _arkProvider.setFastSync(id, false);
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -55,7 +80,7 @@ class ArkMovementDetailScreen extends StatelessWidget {
           body: SafeArea(
             child:
                 movement == null
-                    ? Center(child: _Muted('This movement is no longer in the Ark history.'))
+                    ? const Center(child: _Muted('This movement is no longer in the Ark history.'))
                     : _MovementDetails(walletId: id, movement: movement, unit: unit),
           ),
         );
