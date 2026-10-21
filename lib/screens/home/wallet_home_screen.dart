@@ -84,6 +84,7 @@ import 'package:shimmer/shimmer.dart';
 import 'package:tuple/tuple.dart';
 import 'package:collection/collection.dart';
 import 'package:coconut_wallet/widgets/features/ark/ark_texts.dart';
+import 'package:coconut_wallet/widgets/features/ark/ark_ui.dart';
 
 class WalletHomeScreen extends StatefulWidget {
   const WalletHomeScreen({super.key});
@@ -1617,10 +1618,7 @@ class _WalletHomeScreenState extends State<WalletHomeScreen> with TickerProvider
 
   Widget _buildRecentTransactionCard(int walletId, WalletActivity activity, BitcoinUnit currentUnit) {
     final arkActivity = activity is ArkActivity ? activity : null;
-    final walletName =
-        arkActivity == null
-            ? _viewModel.getWalletById(walletId).name
-            : '${_viewModel.getWalletById(walletId).name} · ${arkRailText(arkActivity.rail)}';
+    final walletName = _viewModel.getWalletById(walletId).name;
     const padding = 20.0;
 
     Widget buildTxRow(WalletActivity activity) {
@@ -1687,7 +1685,16 @@ class _WalletHomeScreenState extends State<WalletHomeScreen> with TickerProvider
                           ),
                         ],
                       ),
-                      Text(walletName, style: CoconutTypography.body3_12.setColor(walletNameTextColor)),
+                      Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Text(walletName, style: CoconutTypography.body3_12.setColor(walletNameTextColor)),
+                          if (arkActivity != null) ...[
+                            CoconutLayout.spacing_100w,
+                            ArkChip(arkRailText(arkActivity.rail)),
+                          ],
+                        ],
+                      ),
                     ],
                   ),
                 ],

@@ -643,13 +643,10 @@ class _SendScreenState extends State<SendScreen> with SingleTickerProviderStateM
                             text: TextSpan(
                               text:
                                   _isBoardMode
-                                      ? 'Boards these funds into the Ark balance of $_boardWalletName. The Ark server '
-                                          'takes a fee, and the funds become spendable in Ark once the funding '
-                                          'transaction has enough confirmations.'
+                                      ? t.ark.board.tooltip(wallet: _boardWalletName)
                                       : _receivingIsVault
                                       ? t.send_screen.vault_transfer_description
-                                      : 'Moves funds from this vault to $_receivingVaultName, '
-                                          'to one of its unused receive addresses.',
+                                      : t.ark.board.vault_tooltip(wallet: _receivingVaultName),
                               style: CoconutTypography.body3_12
                                   .setColor(context.coconutColors.popoverText)
                                   .copyWith(height: 1.3),
@@ -1200,8 +1197,8 @@ class _SendScreenState extends State<SendScreen> with SingleTickerProviderStateM
       await showInfoDialog(
         context,
         context.read<PreferenceProvider>().language,
-        'Ark is unavailable',
-        'Could not prepare the move to Ark: $error',
+        t.ark.board.unavailable,
+        t.ark.board.prepare_failed(error: '$error'),
       );
       if (mounted) Navigator.pop(context);
     }
@@ -1218,9 +1215,11 @@ class _SendScreenState extends State<SendScreen> with SingleTickerProviderStateM
     if (_boardFeeAmount != amount || _boardFeeSats == null) return null;
     final unit = _viewModel.currentUnit;
     final confirmations = terms.requiredConfirmations;
-    return 'Arrives in Ark: ${unit.displayBitcoinAmount(amount - _boardFeeSats!, withUnit: true)} after '
-        '$confirmations confirmation${confirmations == 1 ? '' : 's'} '
-        '(Ark fee ${unit.displayBitcoinAmount(_boardFeeSats!, withUnit: true, shouldCheckZero: true, defaultWhenZero: '0')})';
+    return t.ark.board.arrives(
+      amount: unit.displayBitcoinAmount(amount - _boardFeeSats!, withUnit: true),
+      count: confirmations,
+      fee: unit.displayBitcoinAmount(_boardFeeSats!, withUnit: true, shouldCheckZero: true, defaultWhenZero: '0'),
+    );
   }
 
   void _scheduleBoardFeeEstimate(int amount) {
@@ -1849,10 +1848,10 @@ class _SendScreenState extends State<SendScreen> with SingleTickerProviderStateM
               children: [
                 Text(
                   _isBoardMode
-                      ? 'Move to Ark · $_boardWalletName'
+                      ? t.ark.board.title(wallet: _boardWalletName)
                       : _receivingIsVault
                       ? t.wallet_detail_screen.move_to_vault
-                      : 'Move to $_receivingVaultName',
+                      : t.ark.board.move_to_wallet(wallet: _receivingVaultName),
                   style: CoconutTypography.body3_12_Bold.setColor(context.coconutColors.secondaryText),
                 ),
                 const SizedBox(width: 2),
@@ -2200,7 +2199,7 @@ class _SendScreenState extends State<SendScreen> with SingleTickerProviderStateM
                     return VaultReceivingAddressField(
                       key: index == 0 ? _addressInputFieldKey : null,
                       address: controller.text,
-                      placeholder: 'Preparing the Ark funding address…',
+                      placeholder: t.ark.board.preparing,
                       isError: isAddressError,
                       onTap: _clearFocus,
                     );
@@ -2770,11 +2769,7 @@ class _SendScreenState extends State<SendScreen> with SingleTickerProviderStateM
       if (request.bitcoinAddress != null) return false;
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (!mounted) return;
-        CoconutToast.showToast(
-          context: context,
-          text: 'This is an Ark or Lightning payment: pay it from a hot wallet with Ark.',
-          isVisibleIcon: true,
-        );
+        CoconutToast.showToast(context: context, text: t.ark.board.use_ark_wallet, isVisibleIcon: true);
       });
       return false;
     }

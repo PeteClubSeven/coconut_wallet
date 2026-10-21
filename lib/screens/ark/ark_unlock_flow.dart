@@ -18,6 +18,7 @@ import 'package:coconut_wallet/widgets/common/overlays/common_bottom_sheets.dart
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import 'package:coconut_wallet/localization/strings.g.dart';
 
 /// Opens the Ark wallet of hot wallet [walletId] for the rest of the session, prompting to
 /// unlock it first. Returns whether it is open.
@@ -46,7 +47,7 @@ Future<String?> unlockArkSeed(BuildContext context, WalletItemBase wallet) async
         if (!context.mounted) return null;
         final entered = await CommonBottomSheets.showBottomSheet<Uint8List>(
           context: context,
-          title: 'Enter passphrase',
+          title: t.send_confirm_screen.passphrase_input_title,
           screenName: '${AppRouteNames.arkWallet}/passphrase',
           showCloseButton: true,
           showDragHandle: true,

@@ -35,6 +35,7 @@ import 'package:flutter/rendering.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:provider/provider.dart';
 import 'package:share_plus/share_plus.dart';
+import 'package:coconut_wallet/widgets/features/ark/ark_texts.dart';
 
 class ReceiveAddressScreen extends StatefulWidget {
   final int id;
@@ -164,11 +165,14 @@ class _ReceiveAddressScreenState extends State<ReceiveAddressScreen> {
       if (_announcedMovementIds.contains(movement.id)) continue;
       if (movement.status != ArkMovementStatus.successful || movement.effectiveBalanceSats <= 0) continue;
       _announcedMovementIds.add(movement.id);
-      final rail = movement.kind == ArkMovementKind.lightningReceive ? 'Lightning' : 'Ark';
+      final rail = movement.kind == ArkMovementKind.lightningReceive ? t.ark.rail.lightning : t.ark.rail.ark;
       final unit = context.read<PreferenceProvider>().currentUnit;
       CoconutToast.showBottomToast(
         context: context,
-        text: 'Received ${unit.displayBitcoinAmount(movement.effectiveBalanceSats, withUnit: true)} over $rail',
+        text: t.ark.receive.received_toast(
+          amount: unit.displayBitcoinAmount(movement.effectiveBalanceSats, withUnit: true),
+          rail: rail,
+        ),
       );
     }
     setState(() {});
@@ -191,7 +195,7 @@ class _ReceiveAddressScreenState extends State<ReceiveAddressScreen> {
       if (!mounted || walletId != selectedWalletId || amount != _enteredReceiveAmountSats) return;
       setState(() => _invoice = invoice);
     } catch (error) {
-      if (mounted) setState(() => _invoiceError = 'Could not create an invoice: $error');
+      if (mounted) setState(() => _invoiceError = t.ark.receive.invoice_failed(error: '$error'));
     } finally {
       if (mounted) setState(() => _isCreatingInvoice = false);
     }
@@ -319,21 +323,7 @@ class _ReceiveAddressScreenState extends State<ReceiveAddressScreen> {
                                             ),
                                           ),
                                         ),
-                                        ShrinkAnimationButton(
-                                          onPressed: _onAddressListButtonPressed,
-                                          defaultColor: context.coconutColors.surface,
-                                          pressedOverlayColor: context.coconutColors.surfacePressOverlay,
-                                          borderRadius: 8,
-                                          child: Container(
-                                            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                                            child: Text(
-                                              t.view_all_addresses,
-                                              style: CoconutTypography.body3_12.setColor(
-                                                context.coconutColors.primaryText,
-                                              ),
-                                            ),
-                                          ),
-                                        ),
+                                        _buildViewAllAddressesButton(),
                                       ],
                                     ),
                                   ),
@@ -381,27 +371,30 @@ class _ReceiveAddressScreenState extends State<ReceiveAddressScreen> {
         ),
         CoconutLayout.spacing_500h,
         _ReceiveMethodRow(
-          title: 'Bitcoin address',
+          title: t.ark.request.bitcoin_address,
           subtitle: '${t.address_list_screen.address_index(index: receiveAddressIndex)} · $derivationPath',
           trailing: _buildViewAllAddressesButton(),
           child: CopyTextContainer(text: receiveAddress, isAddress: true, padding: const EdgeInsets.all(20)),
         ),
         _ReceiveMethodRow(
-          title: 'Ark address',
+          title: t.ark.request.ark_address,
           child:
               arkAddress != null
                   ? CopyTextContainer(
-                    text: _shorten(arkAddress),
+                    text: shortenMiddle(arkAddress, head: 24, tail: 16),
                     copyText: arkAddress,
                     padding: const EdgeInsets.all(20),
                   )
+                  : isArkOpen
+                  ? _ReceiveActionTile(text: t.ark.receive.preparing_ark)
                   : _ReceiveActionTile(
-                    text: isArkOpen ? 'Preparing an Ark address…' : 'Unlock to add Ark and Lightning',
-                    onTap: isArkOpen ? null : _unlockArk,
+                    text: t.ark.receive.unlock_ark,
+                    actionText: t.ark.send.unlock,
+                    onTap: _unlockArk,
                   ),
         ),
         _ReceiveMethodRow(
-          title: 'Lightning invoice',
+          title: t.ark.receive.lightning_invoice,
           subtitle: _lightningSubtitle(),
           child: _buildLightningMethod(isArkOpen),
         ),
@@ -411,43 +404,47 @@ class _ReceiveAddressScreenState extends State<ReceiveAddressScreen> {
 
   Widget _buildLightningMethod(bool isArkOpen) {
     if (_enteredReceiveAmountSats == null) {
-      return _ReceiveActionTile(text: 'Set an amount to add a Lightning invoice', onTap: _onEnterAmountTap);
+      return _ReceiveActionTile(
+        text: t.ark.receive.set_amount_for_invoice,
+        actionText: t.address_list_screen.set_amount,
+        onTap: _onEnterAmountTap,
+      );
     }
-    if (_isCreatingInvoice) return const _ReceiveActionTile(text: 'Creating an invoice…');
-    if (_invoiceError != null) return _ReceiveActionTile(text: 'Try again', onTap: _createInvoice);
+    if (_isCreatingInvoice) return _ReceiveActionTile(text: t.ark.receive.creating_invoice);
+    if (_invoiceError != null) {
+      return _ReceiveActionTile(text: _invoiceError!, actionText: t.retry, onTap: _createInvoice);
+    }
     final invoice = _invoice;
     if (invoice == null) {
       return _ReceiveActionTile(
-        text: isArkOpen ? 'Add a Lightning invoice' : 'Unlock to add a Lightning invoice',
+        text: isArkOpen ? t.ark.receive.add_invoice : t.ark.receive.unlock_invoice,
+        actionText: isArkOpen ? t.ark.receive.add : t.ark.send.unlock,
         onTap: _createInvoice,
       );
     }
-    if (_isInvoicePaid) return const _ReceiveActionTile(text: 'Paid');
+    if (_isInvoicePaid) return _ReceiveActionTile(text: t.ark.receive.paid);
     return CopyTextContainer(
-      text: _shorten(invoice.invoice),
+      text: shortenMiddle(invoice.invoice, head: 24, tail: 16),
       copyText: invoice.invoice,
       padding: const EdgeInsets.all(20),
     );
   }
 
   String? _lightningSubtitle() {
-    if (_invoiceError != null) return _invoiceError;
     final invoice = _invoice;
     if (invoice == null) return null;
     final unit = context.read<PreferenceProvider>().currentUnit;
-    if (_isInvoicePaid) return 'Received over Lightning';
-    return 'You receive ${unit.displayBitcoinAmount(invoice.netAmountSats, withUnit: true)} '
-        '(fee ${unit.displayBitcoinAmount(invoice.feeSats, withUnit: true, defaultWhenZero: '0', shouldCheckZero: true)})';
+    if (_isInvoicePaid) return t.ark.receive.received_over_lightning;
+    return t.ark.receive.you_receive(
+      amount: unit.displayBitcoinAmount(invoice.netAmountSats, withUnit: true),
+      fee: formatSats(unit, invoice.feeSats),
+    );
   }
 
   Future<void> _unlockArk() async {
     final opened = await openArkWalletForSession(context, selectedWalletId, userInitiated: true);
     if (opened && _enteredReceiveAmountSats != null) await _createInvoice();
   }
-
-  /// Long Ark addresses and invoices are shown by their ends; the copy button copies all of it.
-  static String _shorten(String value) =>
-      value.length <= 48 ? value : '${value.substring(0, 24)}…${value.substring(value.length - 16)}';
 
   void _onAddressListButtonPressed() {
     Navigator.pushNamed(
@@ -523,30 +520,39 @@ class _ReceiveMethodRow extends StatelessWidget {
   }
 }
 
-/// A row in place of a value that isn't available yet, optionally tappable to get it.
+/// A box in place of a value that isn't available yet, with a small button to get it when there
+/// is one (the "view all addresses" button style).
 class _ReceiveActionTile extends StatelessWidget {
-  const _ReceiveActionTile({required this.text, this.onTap});
+  const _ReceiveActionTile({required this.text, this.actionText, this.onTap});
 
   final String text;
+  final String? actionText;
   final VoidCallback? onTap;
 
   @override
   Widget build(BuildContext context) {
     final colors = context.coconutColors;
-    return ShrinkAnimationButton(
-      onPressed: onTap ?? () {},
-      defaultColor: colors.surface,
-      pressedOverlayColor: colors.surfacePressOverlay,
-      borderRadius: CoconutStyles.radius_400,
-      child: Container(
-        width: double.infinity,
-        padding: const EdgeInsets.all(20),
-        child: Text(
-          text,
-          style: CoconutTypography.body2_14
-              .setColor(onTap != null ? colors.primaryText : colors.secondaryText)
-              .copyWith(decoration: onTap != null ? TextDecoration.underline : null),
-        ),
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.fromLTRB(20, 16, 16, 16),
+      decoration: BoxDecoration(color: colors.surface, borderRadius: BorderRadius.circular(CoconutStyles.radius_400)),
+      child: Row(
+        children: [
+          Expanded(child: Text(text, style: CoconutTypography.body2_14.setColor(colors.secondaryText))),
+          if (actionText != null && onTap != null) ...[
+            CoconutLayout.spacing_300w,
+            ShrinkAnimationButton(
+              onPressed: onTap!,
+              defaultColor: colors.surfaceButton,
+              pressedOverlayColor: colors.surfacePressOverlay,
+              borderRadius: 8,
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                child: Text(actionText!, style: CoconutTypography.body3_12.setColor(colors.surfaceButtonText)),
+              ),
+            ),
+          ],
+        ],
       ),
     );
   }

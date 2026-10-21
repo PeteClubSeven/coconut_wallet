@@ -548,7 +548,7 @@ class _WalletDetailScreenState extends State<WalletDetailScreen> with TickerProv
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text(
-              'VTXO · $vtxoCount',
+              t.ark.wallet.vtxo_count(count: vtxoCount),
               style: CoconutTypography.body2_14_Bold.setColor(context.coconutColors.primaryText),
             ),
             CoconutLayout.spacing_200h,
@@ -562,8 +562,8 @@ class _WalletDetailScreenState extends State<WalletDetailScreen> with TickerProv
                   Expanded(
                     child: _UtxoAction(
                       iconPath: CommonMenuIconPath.grid,
-                      label: 'Overview',
-                      description: 'Balance and VTXOs',
+                      label: t.ark.wallet.overview,
+                      description: t.ark.wallet.overview_description,
                       iconPadding: const EdgeInsets.all(2),
                       onTap:
                           () => Navigator.pushNamed(
@@ -576,8 +576,8 @@ class _WalletDetailScreenState extends State<WalletDetailScreen> with TickerProv
                   Expanded(
                     child: _UtxoAction(
                       iconPath: CommonActionIconPath.rotate,
-                      label: 'Refresh',
-                      description: 'Renew VTXOs',
+                      label: t.ark.wallet.refresh,
+                      description: t.ark.wallet.refresh_description,
                       iconPadding: const EdgeInsets.all(2),
                       isEnabled: vtxoCount > 0,
                       onTap:
@@ -763,7 +763,7 @@ class _WalletDetailScreenState extends State<WalletDetailScreen> with TickerProv
                               curve: Curves.easeOutCubic,
                               child: BottomActionButton(
                                 iconPath: CommonNavigationIconPath.arrowTopDown,
-                                label: 'Move',
+                                label: t.ark.move.title,
                                 labelMaxLines: null,
                                 onTap: _onMovePressed,
                                 buttonLayout: BottomActionButtonLayout.horizontal,
