@@ -40,6 +40,7 @@ import 'package:coconut_wallet/screens/wallet_detail/transaction_fee_bumping_scr
 import 'package:coconut_wallet/screens/wallet_detail/utxo_detail_screen.dart';
 import 'package:coconut_wallet/screens/wallet_detail/utxo_list_screen.dart';
 import 'package:coconut_wallet/screens/wallet_detail/utxo_merge/utxo_merge_screen.dart';
+import 'package:coconut_wallet/screens/ark/ark_movement_detail_screen.dart';
 import 'package:coconut_wallet/screens/ark/vtxo_overview_screen.dart';
 import 'package:coconut_wallet/screens/wallet_detail/utxo_organizer_screen.dart';
 import 'package:coconut_wallet/screens/wallet_detail/utxo_overview/utxo_overview_screen.dart';
@@ -145,6 +146,11 @@ Map<String, WidgetBuilder> buildAppRoutes() {
         (context) => _buildLoadingScreenWithArgs<ArkWalletRouteArgs>(
           context,
           (args) => VtxoOverviewScreen(id: args.id, startRefresh: args.startRefresh),
+        ),
+    AppRouteNames.arkMovementDetail:
+        (context) => _buildLoadingScreenWithArgs<ArkMovementDetailRouteArgs>(
+          context,
+          (args) => ArkMovementDetailScreen(id: args.id, movementId: args.movementId),
         ),
     AppRouteNames.utxoOrganizer:
         (context) =>

@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:coconut_lib/coconut_lib.dart';
+import 'package:coconut_wallet/model/wallet/wallet_activity.dart';
 import 'package:coconut_wallet/providers/ark_provider.dart';
 import 'package:coconut_wallet/enums/network_enums.dart';
 import 'package:coconut_wallet/enums/wallet_enums.dart';
@@ -84,6 +85,8 @@ class TransactionListViewModel extends ChangeNotifier {
   }
 
   final ArkProvider? _arkProvider;
+  List<WalletActivity>? _activityList;
+  List<TransactionRecord>? _activityTxSource;
   late int _balance;
   int get balance => _balance;
 
@@ -163,6 +166,20 @@ class TransactionListViewModel extends ChangeNotifier {
 
   List<TransactionRecord> get txList => _txProvider.txList;
 
+  /// The listed history: on-chain transactions merged with the hot wallet's Ark movements. The
+  /// same list instance is returned until either source changes, so the list widget's diff
+  /// doesn't loop.
+  List<WalletActivity> get activityList {
+    final transactions = _txProvider.txList;
+    if (_activityList == null || !identical(_activityTxSource, transactions)) {
+      _activityTxSource = transactions;
+      _activityList = List.unmodifiable(
+        WalletActivity.merge(transactions, _arkProvider?.snapshot(_walletId)?.movements ?? const []),
+      );
+    }
+    return _activityList!;
+  }
+
   int get walletId => _walletId;
   WalletItemBase get walletListBaseItem => _walletListBaseItem;
   String get walletName => _walletName;
@@ -219,6 +236,7 @@ class TransactionListViewModel extends ChangeNotifier {
   }
 
   void _onArkCacheChanged() {
+    _activityList = null;
     _balance = _getBalance();
     _fiatPriceString = _priceProvider.getFiatPrice(_balance);
     notifyListeners();

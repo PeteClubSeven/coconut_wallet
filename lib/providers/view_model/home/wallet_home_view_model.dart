@@ -1,5 +1,7 @@
 import 'dart:async';
 
+import 'package:coconut_wallet/model/ark/ark_movement.dart';
+import 'package:coconut_wallet/model/wallet/wallet_activity.dart';
 import 'package:coconut_wallet/enums/fiat_enums.dart';
 import 'package:coconut_wallet/providers/ark_provider.dart';
 import 'package:coconut_wallet/enums/network_enums.dart';
@@ -133,6 +135,24 @@ class WalletHomeViewModel extends ChangeNotifier {
         flatTxs.where((t) => confirmedStatuses.contains(TransactionUtil.getStatus(t.item2))).toList()
           ..sort((a, b) => b.item2.timestamp.compareTo(a.item2.timestamp));
     return [...pending, ...confirmed];
+  }
+
+  /// The home carousel's entries: [orderedRecentTransactions] plus recent Ark movements of hot
+  /// wallets (pending, or within [kRecenctTransactionDays] days), pending first, newest first.
+  List<Tuple2<int, WalletActivity>> get orderedRecentActivities {
+    if (!isHomeFeatureEnabled(HomeFeatureType.recentTransaction)) return const [];
+    final walletIds = _walletProvider.walletItemList.map((wallet) => wallet.id).toSet();
+    final since = DateTime.now().subtract(const Duration(days: kRecenctTransactionDays));
+    final entries = [
+      for (final entry in _recentTransactions.entries)
+        if (walletIds.contains(entry.key))
+          for (final tx in entry.value) Tuple2<int, WalletActivity>(entry.key, OnchainActivity(tx)),
+      for (final walletId in walletIds)
+        for (final movement in _arkProvider?.snapshot(walletId)?.movements ?? const <ArkMovement>[])
+          if (movement.isVisibleInHistory && (movement.isPending || movement.timestamp.isAfter(since)))
+            Tuple2<int, WalletActivity>(walletId, ArkActivity(movement)),
+    ];
+    return entries..sort((a, b) => WalletActivity.compare(a.item2, b.item2));
   }
 
   RecentTransactionAnalysis? _recentTransactionAnalysis;

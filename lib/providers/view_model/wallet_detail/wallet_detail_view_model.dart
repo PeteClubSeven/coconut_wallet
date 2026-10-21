@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:coconut_wallet/model/wallet/wallet_activity.dart';
 import 'package:coconut_wallet/providers/ark_provider.dart';
 import 'package:coconut_wallet/enums/network_enums.dart';
 import 'package:coconut_wallet/enums/fiat_enums.dart';
@@ -42,6 +43,8 @@ class WalletDetailViewModel extends ChangeNotifier {
   WalletDetailSecurityWarningType? _nextWarningAfterDismissal;
   bool _isDisposed = false;
   final ArkProvider? _arkProvider;
+  List<WalletActivity>? _activities;
+  List<TransactionRecord>? _activitiesTxSource;
 
   WalletDetailViewModel(
     this._walletId,
@@ -88,6 +91,22 @@ class WalletDetailViewModel extends ChangeNotifier {
   List<TransactionRecord> get recentTransactions =>
       List.unmodifiable(_transactionProvider.txList.take(recentTransactionLimit));
   bool get hasTransactions => _transactionProvider.txList.isNotEmpty;
+
+  /// The history the screen lists: on-chain transactions merged with the hot wallet's Ark
+  /// movements. Rebuilt only when either source changes.
+  List<WalletActivity> get activities {
+    final txList = _transactionProvider.txList;
+    if (_activities == null || !identical(_activitiesTxSource, txList)) {
+      _activitiesTxSource = txList;
+      _activities = List.unmodifiable(
+        WalletActivity.merge(txList, _arkProvider?.snapshot(_walletId)?.movements ?? const []),
+      );
+    }
+    return _activities!;
+  }
+
+  List<WalletActivity> get recentActivities => List.unmodifiable(activities.take(recentTransactionLimit));
+  bool get hasActivities => activities.isNotEmpty;
   bool get isRequestingFaucet => _isRequestingFaucet;
   bool get isWalletSyncing => _isWalletSyncing;
   bool get isRefreshing => _isRefreshing;
@@ -288,6 +307,7 @@ class WalletDetailViewModel extends ChangeNotifier {
   }
 
   void _handleArkCacheChanged() {
+    _activities = null;
     if (!_isDisposed) notifyListeners();
   }
 

@@ -19,7 +19,7 @@ import 'package:coconut_wallet/constants/icon_path.dart';
 import 'package:coconut_wallet/constants/lottie_path.dart';
 import 'package:coconut_wallet/design_system/context/coconut_theme_context_extension.dart';
 import 'package:coconut_wallet/localization/strings.g.dart';
-import 'package:coconut_wallet/model/wallet/transaction_record.dart';
+import 'package:coconut_wallet/model/wallet/wallet_activity.dart';
 import 'package:coconut_wallet/providers/ark_provider.dart';
 import 'package:coconut_wallet/providers/auth_provider.dart';
 import 'package:coconut_wallet/providers/node_provider/node_provider.dart';
@@ -28,6 +28,7 @@ import 'package:coconut_wallet/providers/send_info_provider.dart';
 import 'package:coconut_wallet/providers/transaction_provider.dart';
 import 'package:coconut_wallet/providers/view_model/wallet_detail/wallet_detail_view_model.dart';
 import 'package:coconut_wallet/providers/wallet_provider.dart';
+import 'package:coconut_wallet/screens/ark/ark_movement_detail_screen.dart';
 import 'package:coconut_wallet/screens/ark/ark_unlock_flow.dart';
 import 'package:coconut_wallet/screens/settings/app_settings/app_settings_screen.dart';
 import 'package:coconut_wallet/screens/wallet_detail/wallet_detail_faucet_request_bottom_sheet.dart';
@@ -472,14 +473,14 @@ class _WalletDetailScreenState extends State<WalletDetailScreen> with TickerProv
             _SectionHeader(
               title: t.wallet_detail_screen.recent_transactions,
               actionLabel: t.wallet_detail_screen.view_all,
-              actionEnabled: viewModel.hasTransactions,
+              actionEnabled: viewModel.hasActivities,
               onAction: () {
                 _logAction(WalletDetailAction.txMore);
                 _openTransactionList();
               },
             ),
             CoconutLayout.spacing_200h,
-            if (!viewModel.hasTransactions)
+            if (!viewModel.hasActivities)
               Container(
                 width: MediaQuery.sizeOf(context).width,
                 padding: const EdgeInsets.symmetric(vertical: 60, horizontal: 20),
@@ -513,20 +514,20 @@ class _WalletDetailScreenState extends State<WalletDetailScreen> with TickerProv
                 ),
               )
             else
-              ...viewModel.recentTransactions.indexed.map(
+              ...viewModel.recentActivities.indexed.map(
                 (entry) => _AnimatedRecentTransactionCard(
-                  key: ValueKey(entry.$2.transactionHash),
+                  key: ValueKey(entry.$2.key),
                   delay: Duration(milliseconds: entry.$1 * 100),
-                  padding: EdgeInsets.only(bottom: entry.$1 == viewModel.recentTransactions.length - 1 ? 0 : 8),
+                  padding: EdgeInsets.only(bottom: entry.$1 == viewModel.recentActivities.length - 1 ? 0 : 8),
                   child: TransactionItemCard(
-                    tx: entry.$2,
+                    activity: entry.$2,
                     padding: const EdgeInsets.symmetric(horizontal: 22, vertical: 14),
                     borderRadius: CoconutStyles.radius_200,
                     currentUnit: viewModel.currentUnit,
                     id: widget.id,
                     onPressed: () {
                       _logAction(WalletDetailAction.txDetail);
-                      _openTransaction(entry.$2);
+                      _openActivity(entry.$2);
                     },
                   ),
                 ),
@@ -869,13 +870,7 @@ class _WalletDetailScreenState extends State<WalletDetailScreen> with TickerProv
     _openMnemonicBackup();
   }
 
-  void _openTransaction(TransactionRecord transaction) {
-    Navigator.pushNamed(
-      context,
-      AppRouteNames.transactionDetail,
-      arguments: TransactionDetailRouteArgs(id: widget.id, txHash: transaction.transactionHash),
-    );
-  }
+  void _openActivity(WalletActivity activity) => openWalletActivityDetail(context, widget.id, activity);
 
   void _openTransactionList() {
     Navigator.pushNamed(

@@ -1,3 +1,4 @@
+import 'package:coconut_wallet/model/wallet/wallet_activity.dart';
 import 'package:coconut_wallet/app/router/app_route_names.dart';
 import 'package:coconut_wallet/app/router/route_args.dart';
 import 'dart:io';
@@ -884,7 +885,7 @@ class _TransactionListState extends State<TransactionList> {
             padding: const EdgeInsets.symmetric(horizontal: 16.0),
             child: TransactionItemCard(
               key: Key(tx.transactionHash),
-              tx: tx,
+              activity: OnchainActivity(tx),
               currentUnit: widget._currentUnit,
               id: widget.walldtId,
               onPressed: () {
@@ -913,7 +914,7 @@ class _TransactionListState extends State<TransactionList> {
           padding: const EdgeInsets.symmetric(horizontal: 16.0),
           child: TransactionItemCard(
             key: Key(tx.transactionHash),
-            tx: tx,
+            activity: OnchainActivity(tx),
             currentUnit: widget._currentUnit,
             id: widget.walldtId,
             onPressed: () {

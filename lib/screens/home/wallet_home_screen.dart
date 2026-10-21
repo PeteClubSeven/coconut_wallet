@@ -1,3 +1,5 @@
+import 'package:coconut_wallet/model/wallet/wallet_activity.dart';
+import 'package:coconut_wallet/screens/ark/ark_movement_detail_screen.dart';
 import 'package:coconut_wallet/app/router/app_route_names.dart';
 import 'package:coconut_wallet/app/router/route_args.dart';
 import 'dart:async';
@@ -36,7 +38,6 @@ import 'package:coconut_wallet/enums/transaction_enums.dart';
 import 'package:coconut_wallet/localization/strings.g.dart';
 import 'package:coconut_wallet/model/preference/home_feature.dart';
 import 'package:coconut_wallet/model/wallet/balance.dart';
-import 'package:coconut_wallet/model/wallet/transaction_record.dart';
 import 'package:coconut_wallet/screens/home/analysis_period_bottom_sheet.dart';
 import 'package:coconut_wallet/utils/dashed_border_painter.dart';
 import 'package:coconut_wallet/utils/transaction_util.dart';
@@ -1491,13 +1492,13 @@ class _WalletHomeScreenState extends State<WalletHomeScreen> with TickerProvider
                   child: Selector2<
                     PreferenceProvider,
                     WalletHomeViewModel,
-                    Tuple3<BitcoinUnit, bool, List<Tuple2<int, TransactionRecord>>>
+                    Tuple3<BitcoinUnit, bool, List<Tuple2<int, WalletActivity>>>
                   >(
                     selector:
                         (_, prefProvider, homeViewModel) => Tuple3(
                           prefProvider.currentUnit,
                           homeViewModel.showRecentFeatureInitialLoading,
-                          homeViewModel.orderedRecentTransactions,
+                          homeViewModel.orderedRecentActivities,
                         ),
                     builder: (context, data, child) {
                       final currentUnit = data.item1;
@@ -1572,7 +1573,7 @@ class _WalletHomeScreenState extends State<WalletHomeScreen> with TickerProvider
               ),
               // 페이지 인디케이터 (트랜잭션 단위, 2개 이상일 때만 표시)
               Selector<WalletHomeViewModel, int>(
-                selector: (_, viewModel) => viewModel.orderedRecentTransactions.length,
+                selector: (_, viewModel) => viewModel.orderedRecentActivities.length,
                 builder: (context, indicatorCount, child) {
                   if (indicatorCount <= 1 || _viewModel.isBalanceHidden || _viewModel.fakeBalanceTotalAmount != null) {
                     return Container();
@@ -1613,16 +1614,23 @@ class _WalletHomeScreenState extends State<WalletHomeScreen> with TickerProvider
     );
   }
 
-  Widget _buildRecentTransactionCard(int walletId, TransactionRecord transaction, BitcoinUnit currentUnit) {
-    final walletName = _viewModel.getWalletById(walletId).name;
+  Widget _buildRecentTransactionCard(int walletId, WalletActivity activity, BitcoinUnit currentUnit) {
+    final arkActivity = activity is ArkActivity ? activity : null;
+    final walletName =
+        arkActivity == null
+            ? _viewModel.getWalletById(walletId).name
+            : '${_viewModel.getWalletById(walletId).name} · ${arkActivity.railLabel}';
     const padding = 20.0;
 
-    Widget buildTxRow(TransactionRecord transaction) {
-      final bool isReceived = transaction.transactionType == TransactionType.received;
-      final DateTime txDate = transaction.getDateTimeToDisplay()!.toLocal();
+    Widget buildTxRow(WalletActivity activity) {
+      final status = activity.status;
+      final bool isReceived = status == TransactionStatus.received || status == TransactionStatus.receiving;
+      final DateTime txDate = switch (activity) {
+        OnchainActivity(:final tx) => tx.getDateTimeToDisplay()!.toLocal(),
+        ArkActivity(:final time) => time.toLocal(),
+      };
       final List<String> transactionTimeStamp = DateTimeUtil.formatTimestamp(txDate);
-      final String formattedAmount = currentUnit.formatAmountWithSign(transaction.amount, isPositive: isReceived);
-      final status = TransactionUtil.getStatus(transaction);
+      final String formattedAmount = currentUnit.formatAmountWithSign(activity.amount, isPositive: isReceived);
       final String iconSource = TransactionUtil.getStatusIconAsset(status);
       final datetimeTextColor = context.coconutColors.tertiaryText;
       final walletNameTextColor = context.coconutColors.secondaryText;
@@ -1726,7 +1734,7 @@ class _WalletHomeScreenState extends State<WalletHomeScreen> with TickerProvider
           border: Border.all(color: context.coconutColors.homeSurface),
           color: context.coconutColors.homeSurface,
         ),
-        child: buildTxRow(transaction),
+        child: buildTxRow(activity),
       );
     }
 
@@ -1734,14 +1742,8 @@ class _WalletHomeScreenState extends State<WalletHomeScreen> with TickerProvider
       borderRadius: CoconutStyles.radius_200,
       defaultColor: context.coconutColors.homeSurface,
       pressedOverlayColor: context.coconutColors.homeSurfacePressOverlay,
-      onPressed: () {
-        Navigator.pushNamed(
-          context,
-          AppRouteNames.transactionDetail,
-          arguments: TransactionDetailRouteArgs(id: walletId, txHash: transaction.transactionHash),
-        );
-      },
-      child: Container(padding: const EdgeInsets.all(padding), child: buildTxRow(transaction)),
+      onPressed: () => openWalletActivityDetail(context, walletId, activity),
+      child: Container(padding: const EdgeInsets.all(padding), child: buildTxRow(activity)),
     );
   }
 

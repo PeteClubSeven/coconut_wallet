@@ -3,7 +3,7 @@ import 'package:coconut_wallet/design_system/context/coconut_theme_context_exten
 import 'package:coconut_wallet/enums/fiat_enums.dart';
 import 'package:coconut_wallet/enums/transaction_enums.dart';
 import 'package:coconut_wallet/localization/strings.g.dart';
-import 'package:coconut_wallet/model/wallet/transaction_record.dart';
+import 'package:coconut_wallet/model/wallet/wallet_activity.dart';
 import 'package:coconut_wallet/utils/datetime_util.dart';
 import 'package:coconut_wallet/utils/text_utils.dart';
 import 'package:coconut_wallet/utils/transaction_util.dart';
@@ -13,8 +13,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter_svg/svg.dart';
 import 'package:coconut_wallet/constants/icon_path.dart';
 
+/// A row of a wallet's history: an on-chain transaction or an Ark movement.
 class TransactionItemCard extends StatelessWidget {
-  final TransactionRecord tx;
+  final WalletActivity activity;
   final BitcoinUnit currentUnit;
   final int id;
   final Function onPressed;
@@ -25,15 +26,20 @@ class TransactionItemCard extends StatelessWidget {
 
   TransactionItemCard({
     super.key,
-    required this.tx,
+    required this.activity,
     required this.currentUnit,
     required this.id,
     required this.onPressed,
     this.padding = const EdgeInsets.symmetric(horizontal: Sizes.size20, vertical: Sizes.size16),
     this.borderRadius = 12,
   }) {
-    status = TransactionUtil.getStatus(tx);
+    status = activity.status;
   }
+
+  ArkActivity? get _arkActivity => switch (activity) {
+    ArkActivity ark => ark,
+    OnchainActivity() => null,
+  };
 
   Widget _buildStatus(BuildContext context) {
     final iconPath = TransactionUtil.getStatusIconAsset(status);
@@ -65,7 +71,7 @@ class TransactionItemCard extends StatelessWidget {
       default:
         return const SizedBox.shrink(); // fallback
     }
-    return _buildIconStatus(context, iconPath, iconColor, statusText);
+    return _buildIconStatus(context, iconPath, iconColor, _arkActivity?.statusLabel ?? statusText);
   }
 
   Widget _buildIconStatus(BuildContext context, String assetPath, Color? iconColor, String statusString) {
@@ -92,12 +98,24 @@ class TransactionItemCard extends StatelessWidget {
         icon,
         CoconutLayout.spacing_200w,
         Text(statusString, style: CoconutTypography.body2_14.setColor(context.coconutColors.primaryText)),
+        if (_arkActivity != null) ...[CoconutLayout.spacing_200w, _buildRailBadge(context, _arkActivity!.railLabel)],
       ],
     );
   }
 
+  Widget _buildRailBadge(BuildContext context, String label) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+      decoration: BoxDecoration(
+        color: context.coconutColors.surfaceMuted,
+        borderRadius: BorderRadius.circular(CoconutStyles.radius_100),
+      ),
+      child: Text(label, style: CoconutTypography.caption_10.setColor(context.coconutColors.secondaryText)),
+    );
+  }
+
   Widget _buildAmount(BuildContext context) {
-    final String amountString = currentUnit.displayBitcoinAmount(tx.amount);
+    final String amountString = currentUnit.displayBitcoinAmount(activity.amount);
     final bool isReceived = status == TransactionStatus.received || status == TransactionStatus.receiving;
     final String prefix = isReceived ? '+' : '';
 
@@ -137,7 +155,7 @@ class TransactionItemCard extends StatelessWidget {
         ),
         CoconutLayout.spacing_100w,
         Text(
-          TextUtils.ellipsisIfLonger(tx.memo!, maxLength: 20),
+          TextUtils.ellipsisIfLonger(activity.memo!, maxLength: 20),
           style: CoconutTypography.body3_12.setColor(context.coconutColors.primaryText),
         ),
       ],
@@ -146,7 +164,11 @@ class TransactionItemCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    List<String>? transactionTimeStamp = DateTimeUtil.formatTimestamp(tx.getDateTimeToDisplay()!.toLocal());
+    final displayTime = switch (activity) {
+      OnchainActivity(:final tx) => tx.getDateTimeToDisplay()!,
+      ArkActivity(:final time) => time,
+    };
+    List<String>? transactionTimeStamp = DateTimeUtil.formatTimestamp(displayTime.toLocal());
     final colors = context.coconutColors;
     return ShrinkAnimationButton(
       onPressed: () {
@@ -170,7 +192,7 @@ class TransactionItemCard extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.center,
               children: [_buildStatus(context), CoconutLayout.spacing_200w, _buildAmount(context)],
             ),
-            if (tx.memo != null && tx.memo!.isNotEmpty) _buildMemo(context),
+            if (activity.memo != null && activity.memo!.isNotEmpty) _buildMemo(context),
           ],
         ),
       ),

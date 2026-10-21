@@ -37,6 +37,12 @@ class ArkWalletRouteArgs {
   const ArkWalletRouteArgs({required this.id, this.startRefresh = false});
 }
 
+class ArkMovementDetailRouteArgs {
+  final int id;
+  final int movementId;
+  const ArkMovementDetailRouteArgs({required this.id, required this.movementId});
+}
+
 class UtxoOrganizerRouteArgs {
   final int id;
   const UtxoOrganizerRouteArgs({required this.id});
