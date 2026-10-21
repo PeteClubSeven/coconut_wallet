@@ -440,6 +440,20 @@ recipient rules (anything payable alone, Bitcoin addresses when several, fixed a
 invoices and codes, Max only last and on-chain, duplicates, more than the balance). The full suite matches the upstream
 v0.20.0 baseline (the same 10 pre-existing failures).
 
+### UI
+
+The Ark screens are built from Coconut's own widgets and mirror their closest upstream screen:
+- **Send's two steps:** the send screen and the confirm screen.
+- **VTXO overview:** the UTXO list.
+- **Movement detail:** the transaction detail.
+- **Ark → on-chain:** UTXO merge.
+- **Move sheet:** Coconut's selectable sheets.
+
+The building blocks are `CoconutTextField`, `CoconutOptionPicker`, `FixedBottomButton`,
+`ShrinkAnimationButton` cards, `UnderlineButtonItemCard`, `CoconutChip` and the SVG icons. The few
+shared Ark pieces are in `lib/widgets/features/ark/`. The logic returns codes (problems, labels),
+and the widgets turn them into slang strings.
+
 ## Known PoC limitations
 
 - No exits, BOLT12 offers or LNURL yet. Lightning addresses are untested on the device.
@@ -457,7 +471,8 @@ v0.20.0 baseline (the same 10 pre-existing failures).
   asking.
 - Ark rows have no memos and the home analysis widget is on-chain only. A board funded by a
   vault shows as a plain send in the vault's history.
-- Strings are plain English, not localized. The reused passphrase sheet's button says "Sign".
+- The Ark strings are in an `ark` namespace in every locale file, in English for now (not yet
+  translated). The reused passphrase sheet's button says "Sign".
 - "Retry recovery" is also offered on newly created wallets, whose recovery status is "not run";
   running it is harmless.
 - Android only: iOS hasn't been built with `bark_bitcoin`.
