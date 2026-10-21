@@ -53,6 +53,9 @@ class TestRealmManager implements RealmManager {
       realm.deleteAll<RealmRbfHistory>();
       realm.deleteAll<RealmCpfpHistory>();
       realm.deleteAll<RealmTransactionMemo>();
+      realm.deleteAll<RealmArkWalletState>();
+      realm.deleteAll<RealmArkVtxo>();
+      realm.deleteAll<RealmArkMovement>();
     });
   }
 

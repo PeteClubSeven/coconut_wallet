@@ -20,6 +20,7 @@ import 'package:coconut_wallet/constants/lottie_path.dart';
 import 'package:coconut_wallet/design_system/context/coconut_theme_context_extension.dart';
 import 'package:coconut_wallet/localization/strings.g.dart';
 import 'package:coconut_wallet/model/wallet/transaction_record.dart';
+import 'package:coconut_wallet/providers/ark_provider.dart';
 import 'package:coconut_wallet/providers/auth_provider.dart';
 import 'package:coconut_wallet/providers/node_provider/node_provider.dart';
 import 'package:coconut_wallet/providers/preferences/preference_provider.dart';
@@ -27,10 +28,10 @@ import 'package:coconut_wallet/providers/send_info_provider.dart';
 import 'package:coconut_wallet/providers/transaction_provider.dart';
 import 'package:coconut_wallet/providers/view_model/wallet_detail/wallet_detail_view_model.dart';
 import 'package:coconut_wallet/providers/wallet_provider.dart';
+import 'package:coconut_wallet/screens/ark/ark_unlock_flow.dart';
 import 'package:coconut_wallet/screens/settings/app_settings/app_settings_screen.dart';
 import 'package:coconut_wallet/screens/wallet_detail/wallet_detail_faucet_request_bottom_sheet.dart';
 import 'package:coconut_wallet/services/analytics_service.dart';
-import 'package:coconut_wallet/services/ark/ark_wallet_service.dart';
 import 'package:coconut_wallet/ui/coconut/coconut_app_bar.dart';
 import 'package:coconut_wallet/ui/coconut/coconut_overlays.dart';
 import 'package:coconut_wallet/utils/amimation_util.dart';
@@ -94,6 +95,14 @@ class _WalletDetailScreenState extends State<WalletDetailScreen> with TickerProv
     _playTargetFireworksOnEntry = _viewModel.isTargetReached;
     _fireworksController = AnimationController(vsync: this);
     _fireworksFadeController = AnimationController(vsync: this, duration: const Duration(milliseconds: 300));
+    WidgetsBinding.instance.addPostFrameCallback((_) => _openArkWalletForSession());
+  }
+
+  /// Entering a hot wallet opens its Ark wallet for the rest of the session, after one unlock.
+  /// Skipped when another screen is already on top (e.g. the user went straight to Send).
+  Future<void> _openArkWalletForSession() async {
+    if (!mounted || ModalRoute.of(context)?.isCurrent != true) return;
+    await openArkWalletForSession(context, widget.id);
   }
 
   @override
@@ -166,7 +175,7 @@ class _WalletDetailScreenState extends State<WalletDetailScreen> with TickerProv
                           _buildRecentTransactions(),
                           CoconutLayout.spacing_500h,
                           _buildUtxoSection(),
-                          if (_viewModel.wallet.hasLocalKey && ArkWalletService().isEnabled) ...[
+                          if (context.read<ArkProvider>().supportsArk(_viewModel.wallet)) ...[
                             CoconutLayout.spacing_500h,
                             _buildArkSection(),
                           ],

@@ -31,6 +31,9 @@ class RealmDebugService {
     'RealmWalletPreferences': ['id'],
     'RealmTransactionDraft': ['id', 'walletId', 'createdAt', 'feeRate'],
     'RealmHotWalletMetadata': ['walletId', 'accountIndex', 'backupVerified', 'createdAt'],
+    'RealmArkWalletState': ['walletId', 'spendableSats', 'lastSyncedAt'],
+    'RealmArkVtxo': ['id', 'walletId', 'amountSats', 'expiryHeight'],
+    'RealmArkMovement': ['id', 'walletId', 'movementId', 'effectiveBalanceSats', 'createdAt'],
   };
 
   /// Realm 쿼리 실행
@@ -76,6 +79,12 @@ class RealmDebugService {
         return _convertToMapList(realm.query<RealmWalletPreferences>(query));
       case 'RealmTransactionDraft':
         return _convertToMapList(realm.query<RealmTransactionDraft>(query));
+      case 'RealmArkWalletState':
+        return _convertToMapList(realm.query<RealmArkWalletState>(query));
+      case 'RealmArkVtxo':
+        return _convertToMapList(realm.query<RealmArkVtxo>(query));
+      case 'RealmArkMovement':
+        return _convertToMapList(realm.query<RealmArkMovement>(query));
       default:
         throw ArgumentError('지원되지 않는 테이블: $tableName');
     }
@@ -260,6 +269,46 @@ class RealmDebugService {
           map['txWaitingForSign'] = draft.txWaitingForSign;
           break;
 
+        case RealmArkWalletState state:
+          map['walletId'] = state.walletId;
+          map['spendableSats'] = state.spendableSats;
+          map['pendingInRoundSats'] = state.pendingInRoundSats;
+          map['pendingBoardSats'] = state.pendingBoardSats;
+          map['pendingExitSats'] = state.pendingExitSats;
+          map['pendingLightningSendSats'] = state.pendingLightningSendSats;
+          map['claimableLightningReceiveSats'] = state.claimableLightningReceiveSats;
+          map['address'] = state.address;
+          map['addressIndex'] = state.addressIndex;
+          map['recoveryStateName'] = state.recoveryStateName;
+          map['recoveryDescription'] = state.recoveryDescription;
+          map['lastSyncedAt'] = state.lastSyncedAt?.toIso8601String();
+          break;
+
+        case RealmArkVtxo vtxo:
+          map['id'] = vtxo.id;
+          map['walletId'] = vtxo.walletId;
+          map['vtxoId'] = vtxo.vtxoId;
+          map['amountSats'] = vtxo.amountSats;
+          map['expiryHeight'] = vtxo.expiryHeight;
+          map['kind'] = vtxo.kind;
+          map['isLocked'] = vtxo.isLocked;
+          map['exitDepth'] = vtxo.exitDepth;
+          break;
+
+        case RealmArkMovement movement:
+          map['id'] = movement.id;
+          map['walletId'] = movement.walletId;
+          map['movementId'] = movement.movementId;
+          map['status'] = movement.status;
+          map['subsystemName'] = movement.subsystemName;
+          map['subsystemKind'] = movement.subsystemKind;
+          map['effectiveBalanceSats'] = movement.effectiveBalanceSats;
+          map['offchainFeeSats'] = movement.offchainFeeSats;
+          map['metadataJson'] = movement.metadataJson;
+          map['createdAt'] = movement.createdAt.toIso8601String();
+          map['completedAt'] = movement.completedAt?.toIso8601String();
+          break;
+
         default:
           // 알 수 없는 타입인 경우 기본 처리
           map['type'] = obj.runtimeType.toString();
@@ -395,6 +444,9 @@ class RealmDebugService {
       'RealmTransactionMemo': realm.all<RealmTransactionMemo>().length,
       'RealmWalletPreferences': realm.all<RealmWalletPreferences>().length,
       'RealmTransactionDraft': realm.all<RealmTransactionDraft>().length,
+      'RealmArkWalletState': realm.all<RealmArkWalletState>().length,
+      'RealmArkVtxo': realm.all<RealmArkVtxo>().length,
+      'RealmArkMovement': realm.all<RealmArkMovement>().length,
     };
   }
 

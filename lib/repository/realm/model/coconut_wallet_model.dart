@@ -30,6 +30,9 @@ final realmAllSchemas = [
   RealmTransactionMemo.schema,
   RealmWalletPreferences.schema,
   RealmTransactionDraft.schema,
+  RealmArkWalletState.schema,
+  RealmArkVtxo.schema,
+  RealmArkMovement.schema,
 ];
 
 @RealmModel()
@@ -290,4 +293,66 @@ class _RealmTransactionDraft {
   late String? bitcoinUnit;
   late List<String> selectedUtxoIds;
   late String? txWaitingForSign;
+}
+
+// Ark (bark) data of a hot wallet, as of its last sync. bark keeps the source of truth in its own
+// database, which can only be read through an open wallet (that needs the seed), so this cache is
+// what screens show while the hot wallet is locked.
+@RealmModel()
+class _RealmArkWalletState {
+  @PrimaryKey()
+  late int walletId;
+  late int spendableSats;
+  late int pendingInRoundSats;
+  late int pendingBoardSats;
+  late int pendingExitSats;
+  late int pendingLightningSendSats;
+  late int claimableLightningReceiveSats;
+  // The Ark address shown on the receive screen; replaced once something is received on it.
+  late String? address;
+  late int? addressIndex;
+  late String recoveryStateName;
+  late String recoveryDescription;
+  late DateTime? lastSyncedAt;
+}
+
+@RealmModel()
+class _RealmArkVtxo {
+  @PrimaryKey()
+  late String id; // walletId:vtxoId
+  @Indexed()
+  late int walletId;
+  late String vtxoId;
+  late int amountSats;
+  late int expiryHeight;
+  late String kind;
+  late bool isLocked;
+  late int exitDepth;
+}
+
+@RealmModel()
+class _RealmArkMovement {
+  @PrimaryKey()
+  late String id; // walletId:movementId
+  @Indexed()
+  late int walletId;
+  late int movementId;
+  late String status;
+  late String subsystemName;
+  late String subsystemKind;
+  late String metadataJson;
+  late int intendedBalanceSats;
+  late int effectiveBalanceSats;
+  late int offchainFeeSats;
+  late List<String> sentTo;
+  late List<String> receivedOn;
+  late List<String> inputVtxoIds;
+  late List<String> outputVtxoIds;
+  late List<String> exitedVtxoIds;
+  late DateTime createdAt;
+  late DateTime updatedAt;
+  late DateTime? completedAt;
+  late String? paymentHash;
+  late String? lightningInvoice;
+  late String? lightningOffer;
 }
