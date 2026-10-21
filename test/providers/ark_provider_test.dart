@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:bark_bitcoin/bark_bitcoin.dart' as bark;
 import 'package:coconut_wallet/enums/wallet_enums.dart';
 import 'package:coconut_wallet/model/ark/ark_board.dart';
+import 'package:coconut_wallet/model/ark/ark_payment.dart';
 import 'package:coconut_wallet/model/ark/ark_snapshot.dart';
 import 'package:coconut_wallet/model/wallet/hot_wallet_metadata.dart';
 import 'package:coconut_wallet/model/wallet/singlesig_wallet_item.dart';
@@ -94,6 +95,31 @@ class _FakeArkWalletService extends Fake implements ArkWalletService {
   }) async {
     calls.add('boardPsbt($psbtBase64, $keypairIndex, $expiryHeight)');
     return bark.PendingBoard(vtxoId: 'board:0', amountSats: 100000, txid: 'tx');
+  }
+
+  @override
+  Future<int?> sendArkoorPayment(String fingerprint, String address, int amountSats) async {
+    calls.add('ark($address, $amountSats)');
+    return 11;
+  }
+
+  int staleTipRejections = 0;
+
+  @override
+  Future<int?> payLightningInvoice(String fingerprint, String invoice, {int? amountSats}) async {
+    calls.add('invoice($invoice, $amountSats)');
+    if (staleTipRejections > 0) {
+      staleTipRejections--;
+      throw ArkPaymentException(Exception('error making payment: bad user input: requested expiry is too low'));
+    }
+    return 12;
+  }
+
+  @override
+  Future<int?> sendOnchainTracked(String fingerprint, String address, int amountSats) async {
+    calls.add('onchain($address, $amountSats)');
+    if (moveError != null) throw ArkPaymentException(moveError!);
+    return 13;
   }
 
   @override
@@ -303,6 +329,48 @@ void main() {
     );
 
     expect(() => arkProvider.moveOnchain(1, 'bcrt1qdest', amountSats: 30000), throwsA(isA<ArkMovePendingException>()));
+  });
+
+  test('payments go out over the chosen rail and return their movement', () async {
+    arkService.openWallets.add(_fingerprint.toLowerCase());
+
+    expect(await arkProvider.pay(1, ArkPaymentRail.ark, destination: 'tark1x', amountSats: 5000), 11);
+    expect(
+      await arkProvider.pay(
+        1,
+        ArkPaymentRail.lightningInvoice,
+        destination: 'lnbcrt1',
+        amountSats: 3000,
+        invoiceHasAmount: true,
+      ),
+      12,
+    );
+    expect(await arkProvider.pay(1, ArkPaymentRail.lightningInvoice, destination: 'lnbcrt2', amountSats: 3000), 12);
+
+    expect(arkService.calls.where((call) => !call.startsWith('sync') && !call.startsWith('snapshot')), [
+      'ark(tark1x, 5000)',
+      // An invoice with an amount is paid as is; an amountless one gets the entered amount.
+      'invoice(lnbcrt1, null)',
+      'invoice(lnbcrt2, 3000)',
+    ]);
+  });
+
+  test('a Lightning payment rejected for a stale chain tip is retried after a sync', () async {
+    arkService.openWallets.add(_fingerprint.toLowerCase());
+    arkService.staleTipRejections = 1;
+
+    expect(await arkProvider.pay(1, ArkPaymentRail.lightningInvoice, destination: 'lnbcrt1', amountSats: 1000), 12);
+    expect(arkService.calls.take(4), ['sync', 'invoice(lnbcrt1, 1000)', 'sync', 'invoice(lnbcrt1, 1000)']);
+  });
+
+  test('an on-chain payment bark parked is reported as pending', () async {
+    arkService.openWallets.add(_fingerprint.toLowerCase());
+    arkService.moveError = Exception('offboard x could not complete yet; it remains pending and will be retried');
+
+    expect(
+      () => arkProvider.pay(1, ArkPaymentRail.onchain, destination: 'bcrt1qx', amountSats: 30000),
+      throwsA(isA<ArkMovePendingException>()),
+    );
   });
 
   test('watch-only wallets have no Ark side', () async {

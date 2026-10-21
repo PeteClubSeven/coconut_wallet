@@ -4,6 +4,7 @@ import 'package:coconut_wallet/model/ark/ark_balance.dart';
 import 'package:coconut_wallet/model/ark/ark_board.dart';
 import 'package:coconut_wallet/model/ark/ark_lightning_invoice.dart';
 import 'package:coconut_wallet/model/ark/ark_movement.dart';
+import 'package:coconut_wallet/model/ark/ark_payment.dart';
 import 'package:coconut_wallet/model/ark/ark_snapshot.dart';
 import 'package:coconut_wallet/model/wallet/wallet_item_base.dart';
 import 'package:coconut_wallet/providers/wallet_provider.dart';
@@ -305,6 +306,85 @@ class ArkProvider extends ChangeNotifier {
   Future<void> refreshDelegated(int walletId, List<String> vtxoIds) async {
     await _arkWalletService.refreshDelegated(_requireFingerprint(walletId), vtxoIds);
     await syncNow(walletId, maintenance: false);
+  }
+
+  /// The Ark server's fee to pay [amountSats] over [rail].
+  Future<int> estimatePaymentFee(
+    int walletId,
+    ArkPaymentRail rail, {
+    required String destination,
+    required int amountSats,
+  }) async {
+    final fingerprint = _requireFingerprint(walletId);
+    final estimate = switch (rail) {
+      ArkPaymentRail.ark => await _arkWalletService.estimateArkoorPaymentFee(fingerprint, amountSats),
+      ArkPaymentRail.lightningInvoice ||
+      ArkPaymentRail.lightningAddress => await _arkWalletService.estimateLightningSendFee(fingerprint, amountSats),
+      ArkPaymentRail.onchain => await _arkWalletService.estimateSendOnchainFee(fingerprint, destination, amountSats),
+    };
+    return estimate.feeSats;
+  }
+
+  /// Whether bark accepts [address] as an Ark address for this wallet's server and network.
+  Future<bool> validateArkAddress(int walletId, String address) =>
+      _arkWalletService.validateArkoorAddress(_requireFingerprint(walletId), address);
+
+  /// Pays from [walletId]'s Ark balance and returns the id of the movement it created (null if
+  /// bark recorded none). Lightning payments finish on later syncs: keep [setFastSync] on while
+  /// showing one. For an invoice that carries its amount, pass [invoiceHasAmount] so bark uses
+  /// it. Throws [ArkPaymentException] on failure, or [ArkMovePendingException] when bark
+  /// accepted an on-chain payment it has to finish later.
+  Future<int?> pay(
+    int walletId,
+    ArkPaymentRail rail, {
+    required String destination,
+    required int amountSats,
+    bool invoiceHasAmount = false,
+  }) async {
+    final fingerprint = _requireFingerprint(walletId);
+    final isLightning = rail == ArkPaymentRail.lightningInvoice || rail == ArkPaymentRail.lightningAddress;
+    try {
+      for (var attempt = 0; ; attempt++) {
+        if (isLightning) await _syncChainTipIgnoringFailure(fingerprint);
+        try {
+          return switch (rail) {
+            ArkPaymentRail.ark => await _arkWalletService.sendArkoorPayment(fingerprint, destination, amountSats),
+            ArkPaymentRail.lightningInvoice => await _arkWalletService.payLightningInvoice(
+              fingerprint,
+              destination,
+              amountSats: invoiceHasAmount ? null : amountSats,
+            ),
+            ArkPaymentRail.lightningAddress => await _arkWalletService.payLightningAddress(
+              fingerprint,
+              destination,
+              amountSats,
+            ),
+            ArkPaymentRail.onchain => await _arkWalletService.sendOnchainTracked(fingerprint, destination, amountSats),
+          };
+        } on ArkPaymentException catch (error) {
+          // The server rejects a Lightning payment whose HTLC expiry, set from the wallet's chain
+          // tip, is more than a block behind its own. Nothing was locked, so retry after a sync.
+          if (!isLightning || attempt >= 2 || !error.toString().contains('requested expiry is too low')) rethrow;
+          Logger.log('ArkProvider: Lightning payment rejected for a stale chain tip, retrying');
+        }
+      }
+    } on ArkPaymentException catch (error) {
+      if (rail == ArkPaymentRail.onchain && error.toString().contains('remains pending')) {
+        throw ArkMovePendingException(error.toString());
+      }
+      rethrow;
+    } finally {
+      unawaited(syncNow(walletId, maintenance: false));
+    }
+  }
+
+  /// bark sets a Lightning payment's HTLC expiry from its last known chain tip; a sync refreshes it.
+  Future<void> _syncChainTipIgnoringFailure(String fingerprint) async {
+    try {
+      await _arkWalletService.sync(fingerprint);
+    } catch (error) {
+      Logger.error('ArkProvider: sync before a Lightning payment failed: $error');
+    }
   }
 
   /// Syncs every few seconds while a screen waits for a payment to [walletId] (e.g. a Lightning

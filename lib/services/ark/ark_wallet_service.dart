@@ -32,6 +32,18 @@ String deriveArkSeedHex(({Uint8List mnemonic, Uint8List passphrase}) input) {
   }
 }
 
+/// A pay call that failed. bark may still have created a movement for it (e.g. a Lightning
+/// payment that started and then failed), whose id is [movementId].
+class ArkPaymentException implements Exception {
+  ArkPaymentException(this.cause, {this.movementId});
+
+  final Object cause;
+  final int? movementId;
+
+  @override
+  String toString() => cause.toString();
+}
+
 /// Thrown when an operation needs an Ark wallet that isn't open (its hot wallet is locked).
 class ArkWalletLockedException implements Exception {
   ArkWalletLockedException(this.fingerprint);
@@ -242,6 +254,61 @@ class ArkWalletService {
 
   Future<bark.FeeEstimate> estimateSendOnchainFee(String fingerprint, String address, int amountSats) =>
       withWallet(fingerprint, (wallet) => wallet.estimateSendOnchainFee(address: address, amountSats: amountSats));
+
+  Future<bool> validateArkoorAddress(String fingerprint, String address) =>
+      withWallet(fingerprint, (wallet) => wallet.validateArkoorAddress(address: address));
+
+  Future<bark.FeeEstimate> estimateArkoorPaymentFee(String fingerprint, int amountSats) =>
+      withWallet(fingerprint, (wallet) => wallet.estimateArkoorPaymentFee(amountSats: amountSats));
+
+  Future<bark.FeeEstimate> estimateLightningSendFee(String fingerprint, int amountSats) =>
+      withWallet(fingerprint, (wallet) => wallet.estimateLightningSendFee(amountSats: amountSats));
+
+  /// Pays [amountSats] to an Ark address. Returns the id of the movement it created.
+  Future<int?> sendArkoorPayment(String fingerprint, String address, int amountSats) =>
+      _payTracked(fingerprint, (wallet) => wallet.sendArkoorPayment(arkAddress: address, amountSats: amountSats));
+
+  /// Starts paying a BOLT11 invoice; [amountSats] only for amountless invoices. bark finishes
+  /// the payment on later syncs. Returns the id of the movement it created.
+  Future<int?> payLightningInvoice(String fingerprint, String invoice, {int? amountSats}) => _payTracked(
+    fingerprint,
+    (wallet) => wallet.payLightningInvoice(invoice: invoice, amountSats: amountSats, wait: false),
+  );
+
+  /// Starts paying a Lightning address. Returns the id of the movement it created.
+  Future<int?> payLightningAddress(String fingerprint, String lightningAddress, int amountSats) => _payTracked(
+    fingerprint,
+    (wallet) => wallet.payLightningAddress(
+      lightningAddress: lightningAddress,
+      amountSats: amountSats,
+      comment: null,
+      wait: false,
+    ),
+  );
+
+  /// Pays [amountSats] on-chain to [address] from the Ark balance. Returns the id of the
+  /// movement it created.
+  Future<int?> sendOnchainTracked(String fingerprint, String address, int amountSats) =>
+      _payTracked(fingerprint, (wallet) => wallet.sendOnchain(address: address, amountSats: amountSats));
+
+  /// bark's pay calls don't say which movement they created (an Ark payment returns nothing, a
+  /// Lightning payment in progress has no payment hash yet), so compare the history before and
+  /// after, under the same lock so nothing else adds a movement in between.
+  Future<int?> _payTracked(String fingerprint, Future<Object?> Function(bark.Wallet wallet) pay) {
+    return withWallet(fingerprint, (wallet) async {
+      final before = (await wallet.history()).map((movement) => movement.id).toSet();
+      Object? error;
+      try {
+        await pay(wallet);
+      } catch (e) {
+        error = e;
+      }
+      final created = (await wallet.history()).map((movement) => movement.id).where((id) => !before.contains(id));
+      final movementId = created.isEmpty ? null : created.reduce((a, b) => a > b ? a : b);
+      if (error != null) throw ArkPaymentException(error, movementId: movementId);
+      return movementId;
+    });
+  }
 
   Future<void> _open(String fingerprint, String seedHex, {required bool create, required bool runRecovery}) async {
     final datadir = await _datadir(fingerprint);
