@@ -91,6 +91,7 @@ class _WalletDetailScreenState extends State<WalletDetailScreen> with TickerProv
       context.read<TransactionProvider>(),
       context.read<NodeProvider>(),
       initialUnit: context.read<PreferenceProvider>().currentUnit,
+      arkProvider: context.read<ArkProvider>(),
     );
     _playTargetFireworksOnEntry = _viewModel.isTargetReached;
     _fireworksController = AnimationController(vsync: this);
@@ -254,7 +255,7 @@ class _WalletDetailScreenState extends State<WalletDetailScreen> with TickerProv
           onTap: viewModel.toggleUnit,
           child: Column(
             children: [
-              FiatPrice(satoshiAmount: viewModel.balance),
+              FiatPrice(satoshiAmount: viewModel.displayBalance),
               CoconutLayout.spacing_100h,
               WalletBalanceSyncShimmer(
                 isRefreshing: viewModel.isRefreshing || viewModel.isWalletSyncing,
@@ -264,8 +265,8 @@ class _WalletDetailScreenState extends State<WalletDetailScreen> with TickerProv
                     currentUnit: viewModel.currentUnit,
                     unitStyle: CoconutTypography.heading4_18_Number.setColor(context.coconutColors.primaryText),
                     child: AnimatedBalance(
-                      prevValue: viewModel.balance,
-                      value: viewModel.balance,
+                      prevValue: viewModel.displayBalance,
+                      value: viewModel.displayBalance,
                       currentUnit: viewModel.currentUnit,
                       textStyle: CoconutTypography.heading2_28_NumberBold.setColor(context.coconutColors.primaryText),
                     ),

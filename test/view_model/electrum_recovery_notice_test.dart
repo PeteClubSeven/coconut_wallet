@@ -31,6 +31,9 @@ class _Wallet extends Mock implements WalletProvider {
   Map<int, Balance> fetchWalletBalanceMap() => {};
 
   @override
+  Map<int, int> fetchDisplayBalanceMap() => {};
+
+  @override
   ValueNotifier<WalletLoadState> get walletLoadStateNotifier => loadState;
 
   @override

@@ -123,6 +123,9 @@ class WalletInfoViewModel extends ChangeNotifier {
   int get watchedAddressCount => _walletProvider.getWatchedAddressCount(_walletId);
   Balance get walletBalance => _walletProvider.getWalletBalance(_walletId);
 
+  /// On-chain plus cached Ark balance: everything lost if the seed is lost.
+  int get displayBalance => _walletProvider.getDisplayBalance(_walletId);
+
   bool get hasTaprootKeyPath =>
       _walletItemBase is TaprootWalletItem && (_walletItemBase as TaprootWalletItem).canSpendViaKeyPath;
 

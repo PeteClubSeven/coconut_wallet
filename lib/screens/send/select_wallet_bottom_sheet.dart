@@ -22,10 +22,7 @@ enum BalanceMode {
 }
 
 Map<int, int> _buildBalanceMapIncludingPending(BuildContext context) {
-  final walletProvider = context.read<WalletProvider>();
-  return walletProvider.fetchWalletBalanceMap().map((key, Balance value) {
-    return MapEntry(key, value.total);
-  });
+  return context.read<WalletProvider>().fetchDisplayBalanceMap();
 }
 
 Map<int, int> _buildBalanceMapOnlyUnspent(BuildContext context, List<WalletItemBase> walletList) {

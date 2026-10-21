@@ -310,7 +310,7 @@ class _WalletInfoScreenState extends State<WalletInfoScreen> {
                                   key: _mnemonicBackupButtonKey,
                                   isBackupVerified: viewModel.walletItemBase.hotWalletMetadata?.backupVerified ?? false,
                                   showWarning:
-                                      viewModel.walletBalance.total > 0 &&
+                                      viewModel.displayBalance > 0 &&
                                       !(viewModel.walletItemBase.hotWalletMetadata?.backupVerified ?? false),
                                   backupVerifiedAt: viewModel.walletItemBase.hotWalletMetadata?.backupVerifiedAt,
                                   onPressed: () {

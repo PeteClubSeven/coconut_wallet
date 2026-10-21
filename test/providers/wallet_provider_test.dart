@@ -1,3 +1,5 @@
+import 'package:coconut_wallet/model/wallet/balance.dart';
+import 'package:coconut_wallet/repository/realm/model/coconut_wallet_model.dart';
 import 'package:coconut_wallet/core/exceptions/wallet_name_conflict_exception.dart';
 import 'dart:async';
 import 'dart:ui';
@@ -48,6 +50,14 @@ const _multisigDescriptor =
 
 class FakeWalletRepository extends Fake implements WalletRepository {
   List<WalletItemBase> walletItems = [];
+  final Map<int, Balance> balances = {};
+
+  @override
+  RealmWalletBalance? getWalletBalance(int walletId) {
+    final balance = balances[walletId] ?? Balance(0, 0);
+    return RealmWalletBalance(walletId, walletId, balance.total, balance.confirmed, balance.unconfirmed);
+  }
+
   List<HotWalletMetadata> hotWalletMetadata = [];
   final List<int> deletedWalletIds = [];
   final List<(int, HotWalletLifecycleState)> lifecycleUpdates = [];
@@ -1369,6 +1379,35 @@ void main() {
   // ───────────────────────────────────────────
   group('WalletProvider - Ark', () {
     final arkSeed = 'ab' * 64;
+
+    test('display balance adds the Ark balance; on-chain balance stays on-chain', () async {
+      final walletRepo =
+          FakeWalletRepository()
+            ..walletItems = [_createSinglesigWalletListItem(isHotWallet: true)]
+            ..balances[1] = Balance(70000, 5000);
+      final provider = await _buildProvider(walletRepo);
+
+      expect(provider.getDisplayBalance(1), 75000);
+
+      provider.setOffchainBalanceSource((walletId) => walletId == 1 ? 50000 : 0);
+
+      expect(provider.getWalletBalance(1).total, 75000);
+      expect(provider.getDisplayBalance(1), 125000);
+      expect(provider.fetchDisplayBalanceMap(), {1: 125000});
+
+      provider.dispose();
+    });
+
+    test('a hot wallet holding only Ark funds counts as funded', () async {
+      final walletRepo = FakeWalletRepository()..walletItems = [_createSinglesigWalletListItem(isHotWallet: true)];
+      final provider = await _buildProvider(walletRepo);
+
+      expect(provider.hasHotWalletWithBalance, isFalse);
+      provider.setOffchainBalanceSource((_) => 1000);
+      expect(provider.hasHotWalletWithBalance, isTrue);
+
+      provider.dispose();
+    });
 
     test('creates the Ark wallet before the hot wallet becomes active', () async {
       final walletRepo = FakeWalletRepository()..addHotWalletResult = _createSinglesigWalletListItem(isHotWallet: true);

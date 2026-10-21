@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:coconut_wallet/providers/ark_provider.dart';
 import 'package:coconut_wallet/enums/network_enums.dart';
 import 'package:coconut_wallet/enums/fiat_enums.dart';
 import 'package:coconut_wallet/constants/security_warning_constants.dart';
@@ -40,6 +41,7 @@ class WalletDetailViewModel extends ChangeNotifier {
   final Set<WalletDetailSecurityWarningType> _dismissedWarningsThisSession = {};
   WalletDetailSecurityWarningType? _nextWarningAfterDismissal;
   bool _isDisposed = false;
+  final ArkProvider? _arkProvider;
 
   WalletDetailViewModel(
     this._walletId,
@@ -48,8 +50,10 @@ class WalletDetailViewModel extends ChangeNotifier {
     NodeProvider nodeProvider, {
     required BitcoinUnit initialUnit,
     SharedPrefsRepository? sharedPrefs,
+    ArkProvider? arkProvider,
   }) : _currentUnit = initialUnit,
-       _sharedPrefs = sharedPrefs ?? SharedPrefsRepository() {
+       _sharedPrefs = sharedPrefs ?? SharedPrefsRepository(),
+       _arkProvider = arkProvider {
     _wallet = _walletProvider.getWalletById(_walletId);
     _walletUpdateInfo = nodeProvider.state.registeredWallets[_walletId];
     _nodeSyncState = nodeProvider.state.nodeSyncState;
@@ -59,12 +63,18 @@ class WalletDetailViewModel extends ChangeNotifier {
     _transactionProvider.addListener(_handleTransactionChanged);
     _walletUpdateSubscription = nodeProvider.getWalletStateStream(_walletId).listen(_handleWalletUpdate);
     _nodeSyncStateSubscription = nodeProvider.syncStateStream.listen(_handleNodeSyncState);
+    _arkProvider?.cacheRevision.addListener(_handleArkCacheChanged);
   }
 
   int get walletId => _walletId;
   WalletProvider get walletProvider => _walletProvider;
   WalletItemBase get wallet => _wallet;
+
+  /// The on-chain balance, for logic that moves on-chain coins (e.g. Move to Vault).
   int get balance => _walletProvider.getWalletBalance(_walletId).total;
+
+  /// What the header shows: on-chain plus, for a hot wallet with Ark, the cached Ark balance.
+  int get displayBalance => _walletProvider.getDisplayBalance(_walletId);
   int get utxoCount => _walletProvider.getUtxoList(_walletId).length;
   int? get targetSats => _sharedPrefs.getWalletTargetSats(_walletId);
   bool get isTargetDisabled => _sharedPrefs.isWalletTargetDisabled(_walletId);
@@ -202,7 +212,8 @@ class WalletDetailViewModel extends ChangeNotifier {
   }
 
   WalletDetailSecurityWarningType? getSecurityWarningType({required bool isAppLockEnabled}) {
-    if (!wallet.hasLocalKey || balance <= 0) return null;
+    // Ark funds are lost with the seed too, so they count for backup and app-lock warnings.
+    if (!wallet.hasLocalKey || displayBalance <= 0) return null;
     if (!(wallet.hotWalletMetadata?.backupVerified ?? false) &&
         canShowSecurityWarning(WalletDetailSecurityWarningType.unbackedHotWallet)) {
       return WalletDetailSecurityWarningType.unbackedHotWallet;
@@ -276,6 +287,10 @@ class WalletDetailViewModel extends ChangeNotifier {
     notifyListeners();
   }
 
+  void _handleArkCacheChanged() {
+    if (!_isDisposed) notifyListeners();
+  }
+
   @override
   void dispose() {
     _isDisposed = true;
@@ -283,6 +298,7 @@ class WalletDetailViewModel extends ChangeNotifier {
     _nodeSyncStateSubscription.cancel();
     _walletProvider.removeListener(_handleWalletChanged);
     _transactionProvider.removeListener(_handleTransactionChanged);
+    _arkProvider?.cacheRevision.removeListener(_handleArkCacheChanged);
     super.dispose();
   }
 }

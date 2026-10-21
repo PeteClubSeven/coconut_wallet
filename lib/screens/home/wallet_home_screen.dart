@@ -40,6 +40,7 @@ import 'package:coconut_wallet/model/wallet/transaction_record.dart';
 import 'package:coconut_wallet/screens/home/analysis_period_bottom_sheet.dart';
 import 'package:coconut_wallet/utils/dashed_border_painter.dart';
 import 'package:coconut_wallet/utils/transaction_util.dart';
+import 'package:coconut_wallet/providers/ark_provider.dart';
 import 'package:coconut_wallet/providers/connectivity_provider.dart';
 import 'package:coconut_wallet/providers/auth_provider.dart';
 import 'package:coconut_wallet/providers/node_provider/node_provider.dart';
@@ -583,6 +584,7 @@ class _WalletHomeScreenState extends State<WalletHomeScreen> with TickerProvider
       Provider.of<PreferenceProvider>(context, listen: false),
       Provider.of<ConnectivityProvider>(context, listen: false),
       Provider.of<NodeProvider>(context, listen: false),
+      arkProvider: Provider.of<ArkProvider>(context, listen: false),
     );
     return _viewModel;
   }

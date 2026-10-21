@@ -29,6 +29,7 @@ class ArkProvider extends ChangeNotifier {
     bool startTimer = true,
   }) : _arkWalletService = arkWalletService ?? ArkWalletService() {
     _walletProvider.walletItemListNotifier.addListener(_onWalletListChanged);
+    _walletProvider.setOffchainBalanceSource(totalSats);
     if (startTimer && isEnabled) _startTimer();
   }
 
@@ -37,6 +38,10 @@ class ArkProvider extends ChangeNotifier {
   final ArkWalletService _arkWalletService;
   final Duration maintenanceInterval;
   final Duration fastSyncInterval;
+
+  /// Bumped whenever cached Ark data changes, for screens that show balances or history. Unlike
+  /// [notifyListeners], it doesn't fire for sync progress.
+  final ValueNotifier<int> cacheRevision = ValueNotifier(0);
 
   final Map<int, ArkSnapshot?> _snapshots = {};
   final Map<int, Future<bool>> _opening = {};
@@ -162,6 +167,7 @@ class ArkProvider extends ChangeNotifier {
       if (previous != null && previous.hasSameContent(next)) return;
       if (await _arkRepository.saveSnapshot(walletId, next)) {
         _snapshots[walletId] = next;
+        cacheRevision.value++;
       }
     } catch (error) {
       Logger.error('ArkProvider: failed to refresh the Ark cache of wallet $walletId: $error');
@@ -249,6 +255,8 @@ class ArkProvider extends ChangeNotifier {
     _disposed = true;
     _timer?.cancel();
     _walletProvider.walletItemListNotifier.removeListener(_onWalletListChanged);
+    _walletProvider.setOffchainBalanceSource(null);
+    cacheRevision.dispose();
     super.dispose();
   }
 }

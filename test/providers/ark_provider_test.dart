@@ -31,6 +31,9 @@ class _FakeWalletProvider extends Fake implements WalletProvider {
 
   @override
   Future<T> runHotWalletLifecycleOperation<T>(Future<T> Function() operation) => operation();
+
+  @override
+  void setOffchainBalanceSource(int Function(int walletId)? offchainBalanceOf) {}
 }
 
 class _FakeArkWalletService extends Fake implements ArkWalletService {

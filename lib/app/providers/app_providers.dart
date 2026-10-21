@@ -110,6 +110,8 @@ List<SingleChildWidget> buildAppProviders({
         },
       ),
       ChangeNotifierProvider<ArkProvider>(
+        // Not lazy: it adds the Ark balance to WalletProvider's display balances.
+        lazy: false,
         create: (context) => ArkProvider(context.read<WalletProvider>(), context.read<ArkRepository>()),
       ),
       if (isFirebaseAnalyticsUsed)

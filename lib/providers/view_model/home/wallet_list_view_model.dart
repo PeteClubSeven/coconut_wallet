@@ -1,5 +1,7 @@
 import 'dart:async';
 
+import 'package:coconut_wallet/model/ark/ark_movement.dart';
+import 'package:coconut_wallet/providers/ark_provider.dart';
 import 'package:coconut_wallet/enums/fiat_enums.dart';
 import 'package:coconut_wallet/constants/wallet_constants.dart';
 import 'package:coconut_wallet/enums/network_enums.dart';
@@ -38,6 +40,7 @@ class WalletListViewModel extends ChangeNotifier {
   late final AuthProvider _authProvider;
   late final NodeProvider _nodeProvider;
   late final PriceProvider _priceProvider;
+  final ArkProvider? _arkProvider;
   final HistoricalBitcoinPriceService _historicalBitcoinPriceService;
   late Stream<NodeSyncState> _syncNodeStateStream;
   late PreferenceProvider _preferenceProvider;
@@ -106,7 +109,9 @@ class WalletListViewModel extends ChangeNotifier {
     this._preferenceProvider,
     this._priceProvider, {
     HistoricalBitcoinPriceService? historicalBitcoinPriceService,
-  }) : _historicalBitcoinPriceService = historicalBitcoinPriceService ?? HistoricalBitcoinPriceService() {
+    ArkProvider? arkProvider,
+  }) : _historicalBitcoinPriceService = historicalBitcoinPriceService ?? HistoricalBitcoinPriceService(),
+       _arkProvider = arkProvider {
     _isNetworkOn = _connectivityProvider.isInternetOn;
     _walletOrder = _preferenceProvider.walletOrder;
     _favoriteWalletIds = _preferenceProvider.favoriteWalletIds;
@@ -115,11 +120,12 @@ class WalletListViewModel extends ChangeNotifier {
     _syncNodeStateStream = _nodeProvider.syncStateStream;
     _syncNodeStateSubscription = _syncNodeStateStream.listen(_handleNodeSyncState);
     _walletItemListSnapshot = List<WalletItemBase>.from(_walletProvider.walletItemList);
-    _walletBalance = _walletProvider.fetchWalletBalanceMap().map(
-      (key, balance) => MapEntry(key, AnimatedBalanceData(balance.total, balance.total)),
+    _walletBalance = _walletProvider.fetchDisplayBalanceMap().map(
+      (key, total) => MapEntry(key, AnimatedBalanceData(total, total)),
     );
     _updateWalletBalanceHistory();
     _walletProvider.walletLoadStateNotifier.addListener(updateWalletBalances);
+    _arkProvider?.cacheRevision.addListener(_onArkCacheChanged);
     _preferenceProvider.addListener(_onPreferenceChanged);
     _priceProvider.addListener(_updateBitcoinPrice);
     unawaited(loadHistoricalBitcoinPrices());
@@ -258,7 +264,7 @@ class WalletListViewModel extends ChangeNotifier {
 
   Future<void> updateWalletBalances() async {
     if (_isDisposed) return;
-    final updatedWalletBalance = _updateBalanceMap(_walletProvider.fetchWalletBalanceMap());
+    final updatedWalletBalance = _updateBalanceMap(_walletProvider.fetchDisplayBalanceMap());
     _walletBalance = updatedWalletBalance;
     _updateWalletBalanceHistory();
 
@@ -270,14 +276,28 @@ class WalletListViewModel extends ChangeNotifier {
     notifyListeners();
   }
 
+  void _onArkCacheChanged() {
+    if (_isDisposed) return;
+    _walletBalance = _updateBalanceMap(_walletProvider.fetchDisplayBalanceMap());
+    _updateWalletBalanceHistory();
+    notifyListeners();
+  }
+
   void _updateWalletBalanceHistory() {
-    final transactions =
-        _walletProvider.walletItemList.expand((wallet) => _walletProvider.getTransactionRecordList(wallet.id)).toList()
-          ..sort((a, b) {
-            final timestampComparison = a.timestamp.compareTo(b.timestamp);
-            if (timestampComparison != 0) return timestampComparison;
-            return a.createdAt.compareTo(b.createdAt);
-          });
+    final transactions = <({DateTime timestamp, DateTime createdAt, int amount})>[
+      for (final wallet in _walletProvider.walletItemList) ...[
+        for (final tx in _walletProvider.getTransactionRecordList(wallet.id))
+          (timestamp: tx.timestamp, createdAt: tx.createdAt, amount: tx.amount),
+        // Ark payments change the balance too, so the chart ends at the same total as the header.
+        for (final movement in _arkProvider?.snapshot(wallet.id)?.movements ?? const <ArkMovement>[])
+          if (movement.status == ArkMovementStatus.successful && movement.effectiveBalanceSats != 0)
+            (timestamp: movement.timestamp, createdAt: movement.createdAt, amount: movement.effectiveBalanceSats),
+      ],
+    ]..sort((a, b) {
+      final timestampComparison = a.timestamp.compareTo(b.timestamp);
+      if (timestampComparison != 0) return timestampComparison;
+      return a.createdAt.compareTo(b.createdAt);
+    });
 
     final updatedHistory = <WalletBalanceHistoryPoint>[];
     var runningBalance = 0;
@@ -338,10 +358,10 @@ class WalletListViewModel extends ChangeNotifier {
     return sampled;
   }
 
-  Map<int, AnimatedBalanceData> _updateBalanceMap(Map<int, Balance> balanceMap) {
-    return balanceMap.map((key, balance) {
+  Map<int, AnimatedBalanceData> _updateBalanceMap(Map<int, int> balanceMap) {
+    return balanceMap.map((key, total) {
       final prev = _walletBalance[key]?.current ?? 0;
-      return MapEntry(key, AnimatedBalanceData(balance.total, prev));
+      return MapEntry(key, AnimatedBalanceData(total, prev));
     });
   }
 
@@ -595,6 +615,7 @@ class WalletListViewModel extends ChangeNotifier {
     _walletProvider.walletLoadStateNotifier.removeListener(updateWalletBalances);
     _preferenceProvider.removeListener(_onPreferenceChanged);
     _priceProvider.removeListener(_updateBitcoinPrice);
+    _arkProvider?.cacheRevision.removeListener(_onArkCacheChanged);
     loadingNotifier.dispose();
     pinCheckNotifier.dispose();
     super.dispose();

@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:coconut_wallet/enums/fiat_enums.dart';
+import 'package:coconut_wallet/providers/ark_provider.dart';
 import 'package:coconut_wallet/enums/network_enums.dart';
 import 'package:coconut_wallet/enums/transaction_enums.dart';
 import 'package:coconut_wallet/localization/strings.g.dart';
@@ -44,6 +45,7 @@ class WalletHomeViewModel extends ChangeNotifier {
 
   final Stream<NodeSyncState> _syncNodeStateStream;
   final HomeSecurityWarningPolicy _securityWarningPolicy;
+  final ArkProvider? _arkProvider;
   NodeSyncState _nodeSyncState = NodeSyncState.syncing;
   StreamSubscription<NodeSyncState>? _syncNodeStateSubscription;
 
@@ -163,16 +165,19 @@ class WalletHomeViewModel extends ChangeNotifier {
     this._connectivityProvider,
     this._nodeProvider, {
     HomeSecurityWarningPolicy? securityWarningPolicy,
-  }) : _syncNodeStateStream = _nodeProvider.syncStateStream,
+    ArkProvider? arkProvider,
+  }) : _arkProvider = arkProvider,
+       _syncNodeStateStream = _nodeProvider.syncStateStream,
        _securityWarningPolicy = securityWarningPolicy ?? HomeSecurityWarningPolicy() {
     _isReviewScreenVisible = AppReviewService.shouldShowReviewScreen();
     _syncNodeStateSubscription = _syncNodeStateStream.listen(_handleNodeSyncState);
     _nodeProvider.currentBlockNotifier.addListener(_onCurrentBlockChanged);
 
-    _walletBalance = _walletProvider.fetchWalletBalanceMap().map(
-      (key, balance) => MapEntry(key, AnimatedBalanceData(balance.total, balance.total)),
+    _walletBalance = _walletProvider.fetchDisplayBalanceMap().map(
+      (key, total) => MapEntry(key, AnimatedBalanceData(total, total)),
     );
     _walletProvider.walletLoadStateNotifier.addListener(updateWalletBalancesAndRecentTxs);
+    _arkProvider?.cacheRevision.addListener(updateWalletBalancesAndRecentTxs);
 
     // NodeProvider의 변경사항 listening 추가
     _nodeProvider.addListener(_onNodeProviderChanged);
@@ -414,7 +419,7 @@ class WalletHomeViewModel extends ChangeNotifier {
   }
 
   Future<void> updateWalletBalancesAndRecentTxs() async {
-    final updatedWalletBalance = _updateBalanceMap(_walletProvider.fetchWalletBalanceMap());
+    final updatedWalletBalance = _updateBalanceMap(_walletProvider.fetchDisplayBalanceMap());
     _walletBalance = updatedWalletBalance;
 
     // 최근 트랜잭션: 동기화 완료+블록 높이 있으면 forceRefresh, 아니어도 DB(날짜 기준)로 갱신
@@ -426,10 +431,10 @@ class WalletHomeViewModel extends ChangeNotifier {
     notifyListeners();
   }
 
-  Map<int, AnimatedBalanceData> _updateBalanceMap(Map<int, Balance> balanceMap) {
-    return balanceMap.map((key, balance) {
+  Map<int, AnimatedBalanceData> _updateBalanceMap(Map<int, int> balanceMap) {
+    return balanceMap.map((key, total) {
       final prev = _walletBalance[key]?.current ?? 0;
-      return MapEntry(key, AnimatedBalanceData(balance.total, prev));
+      return MapEntry(key, AnimatedBalanceData(total, prev));
     });
   }
 
@@ -810,6 +815,7 @@ class WalletHomeViewModel extends ChangeNotifier {
     _connectivityProvider.removeListener(_onConnectivityChanged);
     _nodeProvider.removeListener(_onNodeProviderChanged);
     _nodeProvider.currentBlockNotifier.removeListener(_onCurrentBlockChanged);
+    _arkProvider?.cacheRevision.removeListener(updateWalletBalancesAndRecentTxs);
     super.dispose();
   }
 }

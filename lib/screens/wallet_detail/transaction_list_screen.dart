@@ -20,6 +20,7 @@ import 'package:coconut_wallet/localization/strings.g.dart';
 import 'package:coconut_wallet/model/error/app_error.dart';
 import 'package:coconut_wallet/model/wallet/balance.dart';
 import 'package:coconut_wallet/model/wallet/transaction_record.dart';
+import 'package:coconut_wallet/providers/ark_provider.dart';
 import 'package:coconut_wallet/providers/connectivity_provider.dart';
 import 'package:coconut_wallet/providers/node_provider/node_provider.dart';
 import 'package:coconut_wallet/providers/preferences/preference_provider.dart';
@@ -268,6 +269,7 @@ class _TransactionListScreenState extends State<TransactionListScreen> {
       Provider.of<PriceProvider>(context, listen: false),
       Provider.of<PreferenceProvider>(context, listen: false),
       Provider.of<NodeProvider>(context, listen: false),
+      arkProvider: Provider.of<ArkProvider>(context, listen: false),
     );
 
     if (Platform.isIOS) {

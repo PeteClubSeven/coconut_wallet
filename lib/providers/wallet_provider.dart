@@ -60,6 +60,7 @@ class WalletProvider extends ChangeNotifier {
 
   late final Future<void> Function(int) _saveWalletCount;
   Future<void> Function(WalletItemBase)? _unsubscribeWallet;
+  int Function(int walletId)? _offchainBalanceOf;
 
   late final ValueNotifier<WalletLoadState> walletLoadStateNotifier;
   late final ValueNotifier<List<WalletItemBase>> walletItemListNotifier;
@@ -130,11 +131,24 @@ class WalletProvider extends ChangeNotifier {
     _unsubscribeWallet = unsubscribeWallet;
   }
 
+  /// Lets the Ark side add a hot wallet's cached Ark balance to [getDisplayBalance].
+  void setOffchainBalanceSource(int Function(int walletId)? offchainBalanceOf) {
+    _offchainBalanceOf = offchainBalanceOf;
+  }
+
   bool get hasHotWalletWithBalance =>
-      _walletItemList.any((wallet) => wallet.hasLocalKey && getWalletBalance(wallet.id).total > 0);
+      _walletItemList.any((wallet) => wallet.hasLocalKey && getDisplayBalance(wallet.id) > 0);
 
   Map<int, Balance> fetchWalletBalanceMap() {
     return {for (var wallet in _walletItemList) wallet.id: getWalletBalance(wallet.id)};
+  }
+
+  /// The balance screens show for a wallet, in sats: its on-chain total plus, for a hot wallet
+  /// with Ark, its cached Ark total. Spending, fee and vault logic keeps using [getWalletBalance].
+  int getDisplayBalance(int walletId) => getWalletBalance(walletId).total + (_offchainBalanceOf?.call(walletId) ?? 0);
+
+  Map<int, int> fetchDisplayBalanceMap() {
+    return {for (var wallet in _walletItemList) wallet.id: getDisplayBalance(wallet.id)};
   }
 
   WalletItemBase getWalletById(int id) {
