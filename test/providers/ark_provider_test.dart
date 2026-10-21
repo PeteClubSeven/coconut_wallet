@@ -1,4 +1,8 @@
+import 'dart:async';
+
+import 'package:bark_bitcoin/bark_bitcoin.dart' as bark;
 import 'package:coconut_wallet/enums/wallet_enums.dart';
+import 'package:coconut_wallet/model/ark/ark_board.dart';
 import 'package:coconut_wallet/model/ark/ark_snapshot.dart';
 import 'package:coconut_wallet/model/wallet/hot_wallet_metadata.dart';
 import 'package:coconut_wallet/model/wallet/singlesig_wallet_item.dart';
@@ -42,6 +46,9 @@ class _FakeArkWalletService extends Fake implements ArkWalletService {
   final List<String> calls = [];
   ArkSnapshot nextSnapshot = createArkSnapshot();
   Object? maintenanceError;
+  Completer<void>? maintenanceGate;
+  Object? moveError;
+  int fundingAddressCalls = 0;
 
   @override
   bool get isEnabled => true;
@@ -68,7 +75,32 @@ class _FakeArkWalletService extends Fake implements ArkWalletService {
   @override
   Future<void> maintenance(String fingerprint) async {
     calls.add('maintenance');
+    await maintenanceGate?.future;
     if (maintenanceError != null) throw maintenanceError!;
+  }
+
+  @override
+  Future<bark.BoardFundingInfo> boardFundingAddress(String fingerprint) async {
+    fundingAddressCalls++;
+    return bark.BoardFundingInfo(address: 'bcrt1pfunding$fundingAddressCalls', expiryHeight: 9000, keypairIndex: 7);
+  }
+
+  @override
+  Future<bark.PendingBoard> boardPsbt(
+    String fingerprint, {
+    required String psbtBase64,
+    required int keypairIndex,
+    required int expiryHeight,
+  }) async {
+    calls.add('boardPsbt($psbtBase64, $keypairIndex, $expiryHeight)');
+    return bark.PendingBoard(vtxoId: 'board:0', amountSats: 100000, txid: 'tx');
+  }
+
+  @override
+  Future<String> sendOnchain(String fingerprint, String address, int amountSats) async {
+    calls.add('sendOnchain($address, $amountSats)');
+    if (moveError != null) throw moveError!;
+    return 'txid';
   }
 
   @override
@@ -226,6 +258,51 @@ void main() {
     await arkProvider.refreshDelegated(1, ['a:0', 'b:1']);
 
     expect(arkService.calls, ['refreshDelegated(a:0,b:1)', 'sync', 'snapshot(address: null)']);
+  });
+
+  test('a sync requested during a sync runs after it', () async {
+    arkService.openWallets.add(_fingerprint.toLowerCase());
+    arkService.maintenanceGate = Completer<void>();
+
+    final first = arkProvider.syncNow(1);
+    await arkProvider.syncNow(1, maintenance: false);
+    expect(arkService.calls, ['maintenance']);
+
+    arkService.maintenanceGate!.complete();
+    await first;
+    await Future<void>.delayed(const Duration(milliseconds: 20));
+
+    expect(arkService.calls, [
+      'maintenance',
+      'snapshot(address: null)',
+      'sync',
+      'snapshot(address: tark1pwh9vsmezqqpjy9akejayl2vvcse6he97rn40g84xrlvrlnhayuuyefrp9nse2y3zqqpj)',
+    ]);
+  });
+
+  test('the board funding address is reused until a board succeeds', () async {
+    arkService.openWallets.add(_fingerprint.toLowerCase());
+
+    final first = await arkProvider.boardFunding(1);
+    final again = await arkProvider.boardFunding(1);
+    expect(again.address, first.address);
+    expect(arkService.fundingAddressCalls, 1);
+
+    await arkProvider.board(1, unsignedPsbtBase64: 'cHNidP8=', funding: first);
+    expect(arkService.calls.first, 'boardPsbt(cHNidP8=, 7, 9000)');
+
+    final next = await arkProvider.boardFunding(1);
+    expect(next.address, isNot(first.address));
+    expect(arkService.fundingAddressCalls, 2);
+  });
+
+  test('a move bark parked is reported as pending, not failed', () async {
+    arkService.openWallets.add(_fingerprint.toLowerCase());
+    arkService.moveError = Exception(
+      'offboard abc could not complete yet (parked in Broadcasting); it remains pending and will be retried on wallet sync',
+    );
+
+    expect(() => arkProvider.moveOnchain(1, 'bcrt1qdest', amountSats: 30000), throwsA(isA<ArkMovePendingException>()));
   });
 
   test('watch-only wallets have no Ark side', () async {

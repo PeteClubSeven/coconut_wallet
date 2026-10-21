@@ -19,8 +19,16 @@ thread logs, usually a tokio worker. The Dart bindings implement that callback w
 `Wallet.open`, from `bark_ffi::muniffi::db::open_sqlite_db`). Don't call `setLogger` with this
 patch: the `log` crate accepts a single logger per process.
 
+## Error messages (`lib/src/generated/bark.dart`)
+
+bark-ffi's errors are a uniffi `flat_error`: the variant index followed by the error's message
+(`Display`, the full anyhow chain). The uniffi-dart generated reader only reads the index, so
+every bark error reached Dart as the bare `ErrorException.inner`, with no way to tell a parked
+offboard from a refused board. `ErrorExceptionErrorHandler.lift` now returns a `BarkException`
+carrying the message (`toString()` is the message).
+
 ## Updating
 
 Copy the new release from the pub cache (or the `dart/` directory of
 https://gitlab.com/ark-bitcoin/bark-ffi-bindings at the matching tag), drop `example/`, and
-re-apply the two `COCONUT PATCH` hunks. The bark version must match the Ark server's.
+re-apply the `COCONUT PATCH` hunks (two in `rust/`, one in `lib/src/generated/bark.dart`). The bark version must match the Ark server's.

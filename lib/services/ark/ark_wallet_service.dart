@@ -202,6 +202,47 @@ class ArkWalletService {
   Future<void> refreshDelegated(String fingerprint, List<String> vtxoIds) =>
       withWallet(fingerprint, (wallet) async => wallet.refreshVtxosDelegated(vtxoIds: vtxoIds));
 
+  Future<bark.ArkInfo?> arkInfo(String fingerprint) => withWallet(fingerprint, (wallet) => wallet.arkInfo());
+
+  /// A new address to fund a board to. Each call derives and stores a new key from the same
+  /// keychain as Ark addresses, so callers should reuse it until a board succeeds.
+  Future<bark.BoardFundingInfo> boardFundingAddress(String fingerprint) =>
+      withWallet(fingerprint, (wallet) => wallet.boardFundingAddress());
+
+  Future<bark.FeeEstimate> estimateBoardFee(String fingerprint, int amountSats) =>
+      withWallet(fingerprint, (wallet) => wallet.estimateBoardFee(amountSats: amountSats));
+
+  /// Registers a board funded by [psbtBase64] (cosigned by the server). bark broadcasts the
+  /// funding transaction only if the PSBT is finalized; otherwise it waits to see it on-chain.
+  Future<bark.PendingBoard> boardPsbt(
+    String fingerprint, {
+    required String psbtBase64,
+    required int keypairIndex,
+    required int expiryHeight,
+  }) => withWallet(
+    fingerprint,
+    (wallet) => wallet.boardPsbt(psbtBase64: psbtBase64, keypairIndex: keypairIndex, expiryHeight: expiryHeight),
+  );
+
+  /// Broadcasts a raw transaction through bark's chain source; returns its txid.
+  Future<String> broadcastTx(String fingerprint, String txHex) =>
+      withWallet(fingerprint, (wallet) => wallet.broadcastTx(txHex: txHex));
+
+  /// Offboards every VTXO to [address]; the fee is taken out of the amount. Returns the txid.
+  Future<String> offboardAll(String fingerprint, String address) =>
+      withWallet(fingerprint, (wallet) async => (await wallet.offboardAll(bitcoinAddress: address)).txid);
+
+  Future<bark.FeeEstimate> estimateOffboardAllFee(String fingerprint, String address) =>
+      withWallet(fingerprint, (wallet) => wallet.estimateOffboardAllFee(address: address));
+
+  /// Pays [amountSats] to [address] on-chain from the Ark balance; the fee comes on top. Returns
+  /// the txid.
+  Future<String> sendOnchain(String fingerprint, String address, int amountSats) =>
+      withWallet(fingerprint, (wallet) => wallet.sendOnchain(address: address, amountSats: amountSats));
+
+  Future<bark.FeeEstimate> estimateSendOnchainFee(String fingerprint, String address, int amountSats) =>
+      withWallet(fingerprint, (wallet) => wallet.estimateSendOnchainFee(address: address, amountSats: amountSats));
+
   Future<void> _open(String fingerprint, String seedHex, {required bool create, required bool runRecovery}) async {
     final datadir = await _datadir(fingerprint);
     final stopwatch = Stopwatch()..start();

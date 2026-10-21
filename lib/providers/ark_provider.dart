@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:coconut_wallet/model/ark/ark_balance.dart';
+import 'package:coconut_wallet/model/ark/ark_board.dart';
 import 'package:coconut_wallet/model/ark/ark_lightning_invoice.dart';
 import 'package:coconut_wallet/model/ark/ark_snapshot.dart';
 import 'package:coconut_wallet/model/wallet/wallet_item_base.dart';
@@ -50,6 +51,9 @@ class ArkProvider extends ChangeNotifier {
   final Map<int, String> _syncErrors = {};
   final Set<int> _declined = {};
   final Set<int> _syncing = {};
+  final Set<int> _syncAgain = {};
+  final Map<int, ArkBoardFunding> _boardFunding = {};
+  ArkBoardTerms? _boardTerms;
   final Map<int, int> _fastSync = {};
   Timer? _timer;
   bool _isForeground = true;
@@ -142,7 +146,12 @@ class ArkProvider extends ChangeNotifier {
   /// delegated refreshes. Skipped when the wallet is locked or already syncing.
   Future<void> syncNow(int walletId, {bool maintenance = true}) async {
     final fingerprint = _fingerprint(walletId);
-    if (fingerprint == null || !_arkWalletService.isOpen(fingerprint) || _syncing.contains(walletId)) return;
+    if (fingerprint == null || !_arkWalletService.isOpen(fingerprint)) return;
+    if (_syncing.contains(walletId)) {
+      // Whatever asked (e.g. a move just made) must see a sync that starts after it.
+      _syncAgain.add(walletId);
+      return;
+    }
     _syncing.add(walletId);
     _notify();
     try {
@@ -176,6 +185,82 @@ class ArkProvider extends ChangeNotifier {
     } finally {
       _syncing.remove(walletId);
       _notify();
+      if (_syncAgain.remove(walletId)) unawaited(syncNow(walletId, maintenance: false));
+    }
+  }
+
+  /// The Ark server's board limits (cached for the session).
+  Future<ArkBoardTerms> boardTerms(int walletId) async {
+    final cached = _boardTerms;
+    if (cached != null) return cached;
+    final info = await _arkWalletService.arkInfo(_requireFingerprint(walletId));
+    if (info == null) throw StateError('The Ark server is not reachable');
+    return _boardTerms = ArkBoardTerms(
+      minAmountSats: info.minBoardAmountSats,
+      maxAmountSats: info.maxVtxoAmountSats,
+      requiredConfirmations: info.requiredBoardConfirmations,
+    );
+  }
+
+  /// The address to fund a board into [walletId]'s Ark wallet. The same one is returned until a
+  /// board succeeds: each new one uses up a key of the Ark keychain.
+  Future<ArkBoardFunding> boardFunding(int walletId) async {
+    final cached = _boardFunding[walletId];
+    if (cached != null) return cached;
+    final info = await _arkWalletService.boardFundingAddress(_requireFingerprint(walletId));
+    return _boardFunding[walletId] = ArkBoardFunding(
+      address: info.address,
+      expiryHeight: info.expiryHeight,
+      keypairIndex: info.keypairIndex,
+    );
+  }
+
+  Future<int> estimateBoardFee(int walletId, int amountSats) async =>
+      (await _arkWalletService.estimateBoardFee(_requireFingerprint(walletId), amountSats)).feeSats;
+
+  /// Registers a board of [funding]'s address with the Ark server. [unsignedPsbtBase64] is the
+  /// funding transaction before signing: bark then leaves broadcasting it to the caller and
+  /// watches for it on-chain. Its txid is final from here on, so it must not be replaced (RBF).
+  Future<void> board(int walletId, {required String unsignedPsbtBase64, required ArkBoardFunding funding}) async {
+    await _arkWalletService.boardPsbt(
+      _requireFingerprint(walletId),
+      psbtBase64: unsignedPsbtBase64,
+      keypairIndex: funding.keypairIndex,
+      expiryHeight: funding.expiryHeight,
+    );
+    _boardFunding.remove(walletId);
+    unawaited(syncNow(walletId, maintenance: false));
+  }
+
+  /// Broadcasts a raw transaction through bark's chain source, as a fallback for Coconut's own.
+  Future<String> broadcastTx(int walletId, String txHex) =>
+      _arkWalletService.broadcastTx(_requireFingerprint(walletId), txHex);
+
+  /// The fee to move Ark funds to [address]: everything when [amountSats] is null (taken out of
+  /// it), or [amountSats] (on top).
+  Future<int> estimateMoveOnchainFee(int walletId, String address, {int? amountSats}) async {
+    final fingerprint = _requireFingerprint(walletId);
+    final estimate =
+        amountSats == null
+            ? await _arkWalletService.estimateOffboardAllFee(fingerprint, address)
+            : await _arkWalletService.estimateSendOnchainFee(fingerprint, address, amountSats);
+    return estimate.feeSats;
+  }
+
+  /// Moves Ark funds to [address] on-chain: everything (an offboard) when [amountSats] is null,
+  /// else that amount with the rest staying in Ark. Returns the txid. Throws
+  /// [ArkMovePendingException] when bark accepted the move but has to finish it on a later sync.
+  Future<String> moveOnchain(int walletId, String address, {int? amountSats}) async {
+    final fingerprint = _requireFingerprint(walletId);
+    try {
+      return amountSats == null
+          ? await _arkWalletService.offboardAll(fingerprint, address)
+          : await _arkWalletService.sendOnchain(fingerprint, address, amountSats);
+    } catch (error) {
+      if (error.toString().contains('remains pending')) throw ArkMovePendingException(error.toString());
+      rethrow;
+    } finally {
+      unawaited(syncNow(walletId, maintenance: false));
     }
   }
 

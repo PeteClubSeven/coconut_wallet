@@ -4028,9 +4028,27 @@ class FfiConverterErrorException {
   }
 }
 
+/// COCONUT PATCH: a bark error with its message.
+///
+/// bark-ffi's `Error` is a uniffi `flat_error`: on the wire, the variant index is followed by the
+/// error's message. The generated [FfiConverterErrorException] reads only the index, so every
+/// error used to surface as the bare `ErrorException.inner`. The handler below keeps the message.
+class BarkException implements Exception {
+  const BarkException(this.message);
+
+  final String message;
+
+  @override
+  String toString() => message;
+}
+
 class ErrorExceptionErrorHandler extends UniffiRustCallStatusErrorHandler {
   @override
   Exception lift(RustBuffer errorBuf) {
+    final bytes = errorBuf.asUint8List();
+    if (bytes.length > 4) {
+      return BarkException(FfiConverterString.read(Uint8List.sublistView(bytes, 4)).value);
+    }
     return FfiConverterErrorException.lift(errorBuf);
   }
 }
