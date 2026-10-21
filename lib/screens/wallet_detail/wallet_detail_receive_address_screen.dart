@@ -1,9 +1,17 @@
+import 'dart:async';
+import 'package:coconut_wallet/model/ark/ark_lightning_invoice.dart';
+import 'package:coconut_wallet/model/ark/ark_movement.dart';
+import 'package:coconut_wallet/model/ark/ark_snapshot.dart';
+import 'package:coconut_wallet/providers/ark_provider.dart';
+import 'package:coconut_wallet/screens/ark/ark_unlock_flow.dart';
+import 'package:coconut_wallet/ui/coconut/coconut_overlays.dart';
+import 'package:coconut_wallet/widgets/common/buttons/copy_text_container.dart';
 import 'package:coconut_wallet/app/router/app_route_names.dart';
 import 'package:coconut_wallet/app/router/route_args.dart';
 import 'dart:io';
 import 'dart:ui' as ui;
 
-import 'package:coconut_design_system/coconut_design_system.dart' hide CoconutAppBar;
+import 'package:coconut_design_system/coconut_design_system.dart' hide CoconutAppBar, CoconutToast;
 import 'package:coconut_wallet/analytics/analytics_screen_names.dart';
 import 'package:coconut_wallet/ui/coconut/coconut_app_bar.dart';
 import 'package:coconut_wallet/app_guard.dart';
@@ -44,6 +52,14 @@ class _ReceiveAddressScreenState extends State<ReceiveAddressScreen> {
   late int _walletCount;
   final GlobalKey _qrCaptureKey = GlobalKey();
   final GlobalKey _shareButtonKey = GlobalKey();
+  late final ArkProvider _arkProvider;
+
+  // The Ark side of a hot wallet's unified (BIP321) receive code.
+  ArkLightningInvoice? _invoice;
+  bool _isCreatingInvoice = false;
+  String? _invoiceError;
+  int? _fastSyncWalletId;
+  final Set<int> _announcedMovementIds = {};
 
   String get derivationPath {
     if (_receiveAddress == null) return "";
@@ -60,10 +76,39 @@ class _ReceiveAddressScreenState extends State<ReceiveAddressScreen> {
     return _receiveAddress!.address;
   }
 
+  bool get _isArkWallet => _selectedWalletItem != null && _arkProvider.supportsArk(_selectedWalletItem!);
+
+  ArkSnapshot? get _arkSnapshot => _isArkWallet ? _arkProvider.snapshot(selectedWalletId) : null;
+
+  String? get _arkAddress => _arkSnapshot?.address;
+
+  bool get _isInvoicePaid {
+    final invoice = _invoice;
+    if (invoice == null) return false;
+    return _arkSnapshot?.movements.any(
+          (movement) =>
+              movement.kind == ArkMovementKind.lightningReceive &&
+              movement.paymentHash == invoice.paymentHash &&
+              movement.status == ArkMovementStatus.successful,
+        ) ??
+        false;
+  }
+
+  /// A plain address, a BIP21 URI with an amount, or for hot wallets with Ark a BIP321 URI that
+  /// adds the Ark address and, once an amount is set, a Lightning invoice. Wallets that don't
+  /// know a payment method ignore its parameter and pay on-chain.
   String get qrData {
     if (_receiveAddress == null) return '';
-    if (_enteredReceiveAmountSats == null) return _receiveAddress!.address;
-    return buildBip21UriFromWalletAddress(_receiveAddress!, amount: _enteredReceiveAmountSats);
+    final parameters = <String, String>{
+      if (_arkAddress != null) 'ark': _arkAddress!,
+      if (_invoice != null && !_isInvoicePaid) 'lightning': _invoice!.invoice,
+    };
+    if (_enteredReceiveAmountSats == null && parameters.isEmpty) return _receiveAddress!.address;
+    return buildBip21UriFromWalletAddress(
+      _receiveAddress!,
+      amount: _enteredReceiveAmountSats,
+      parameters: parameters.isEmpty ? null : parameters,
+    );
   }
 
   int get selectedWalletId => _selectedWalletItem != null ? _selectedWalletItem!.id : -1;
@@ -75,15 +120,96 @@ class _ReceiveAddressScreenState extends State<ReceiveAddressScreen> {
     AppGuard.disablePrivacyScreen();
 
     final walletProvider = context.read<WalletProvider>();
+    _arkProvider = context.read<ArkProvider>();
     _selectedWalletItem = walletProvider.walletItemList.where((e) => e.id == widget.id).first;
     _receiveAddress = walletProvider.getReceiveAddress(_selectedWalletItem!.id);
     _walletCount = walletProvider.walletItemList.length;
+    _arkProvider.cacheRevision.addListener(_onArkCacheChanged);
+    _onArkWalletSelected();
   }
 
   @override
   void dispose() {
+    _arkProvider.cacheRevision.removeListener(_onArkCacheChanged);
+    _stopFastSync();
     AppGuard.enablePrivacyScreen();
     super.dispose();
+  }
+
+  /// While this screen is open, a hot wallet with Ark syncs every few seconds so Ark and
+  /// Lightning payments (which bark claims during sync) show up promptly.
+  void _onArkWalletSelected() {
+    _stopFastSync();
+    _invoice = null;
+    _invoiceError = null;
+    _announcedMovementIds
+      ..clear()
+      ..addAll(_arkSnapshot?.movements.map((movement) => movement.id) ?? const []);
+    if (!_isArkWallet) return;
+    _fastSyncWalletId = selectedWalletId;
+    _arkProvider.setFastSync(selectedWalletId, true);
+    unawaited(_arkProvider.syncNow(selectedWalletId, maintenance: false));
+  }
+
+  void _stopFastSync() {
+    final walletId = _fastSyncWalletId;
+    if (walletId == null) return;
+    _arkProvider.setFastSync(walletId, false);
+    _fastSyncWalletId = null;
+  }
+
+  void _onArkCacheChanged() {
+    if (!mounted || !_isArkWallet) return;
+    for (final movement in _arkSnapshot?.movements ?? const <ArkMovement>[]) {
+      if (_announcedMovementIds.contains(movement.id)) continue;
+      if (movement.status != ArkMovementStatus.successful || movement.effectiveBalanceSats <= 0) continue;
+      _announcedMovementIds.add(movement.id);
+      final rail = movement.kind == ArkMovementKind.lightningReceive ? 'Lightning' : 'Ark';
+      final unit = context.read<PreferenceProvider>().currentUnit;
+      CoconutToast.showBottomToast(
+        context: context,
+        text: 'Received ${unit.displayBitcoinAmount(movement.effectiveBalanceSats, withUnit: true)} over $rail',
+      );
+    }
+    setState(() {});
+  }
+
+  /// Opens the Ark wallet for the session if needed, then makes an invoice for the entered amount.
+  Future<void> _createInvoice() async {
+    final amount = _enteredReceiveAmountSats;
+    final walletId = selectedWalletId;
+    setState(() {
+      _invoice = null;
+      _invoiceError = null;
+    });
+    if (amount == null || !_isArkWallet) return;
+    if (!await openArkWalletForSession(context, walletId, userInitiated: true)) return;
+    if (!mounted || walletId != selectedWalletId || amount != _enteredReceiveAmountSats) return;
+    setState(() => _isCreatingInvoice = true);
+    try {
+      final invoice = await _arkProvider.createLightningInvoice(walletId, amount);
+      if (!mounted || walletId != selectedWalletId || amount != _enteredReceiveAmountSats) return;
+      setState(() => _invoice = invoice);
+    } catch (error) {
+      if (mounted) setState(() => _invoiceError = 'Could not create an invoice: $error');
+    } finally {
+      if (mounted) setState(() => _isCreatingInvoice = false);
+    }
+  }
+
+  Future<void> _onEnterAmountTap() async {
+    final preferenceProvider = context.read<PreferenceProvider>();
+    final result = await Bip21AmountBottomSheet.show(
+      context: context,
+      currentUnit: preferenceProvider.currentUnit,
+      initialAmountSats: _enteredReceiveAmountSats,
+      screenName: AnalyticsScreenNames.receiveAddressSetAmountSheet,
+    );
+    if (!mounted || result == null || !result.didEdit) return;
+    setState(() {
+      _enteredReceiveAmountSats = result.amountInSats;
+    });
+    await _createInvoice();
   }
 
   @override
@@ -124,19 +250,7 @@ class _ReceiveAddressScreenState extends State<ReceiveAddressScreen> {
           _selectedWalletItem != null
               ? InputAndShareOverlay(
                 shareButtonKey: _shareButtonKey,
-                onEnterAmountTap: () async {
-                  final preferenceProvider = context.read<PreferenceProvider>();
-                  final result = await Bip21AmountBottomSheet.show(
-                    context: context,
-                    currentUnit: preferenceProvider.currentUnit,
-                    initialAmountSats: _enteredReceiveAmountSats,
-                    screenName: AnalyticsScreenNames.receiveAddressSetAmountSheet,
-                  );
-                  if (!mounted || result == null || !result.didEdit) return;
-                  setState(() {
-                    _enteredReceiveAmountSats = result.amountInSats;
-                  });
-                },
+                onEnterAmountTap: _onEnterAmountTap,
                 onShareTap: () async {
                   try {
                     final RenderRepaintBoundary boundary =
@@ -169,65 +283,171 @@ class _ReceiveAddressScreenState extends State<ReceiveAddressScreen> {
                 child: SafeArea(
                   child: Container(
                     padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 20),
-                    child: Column(
-                      children: [
-                        QrCodeInfo(
-                          qrCaptureKey: _qrCaptureKey,
-                          qrcodeTopWidget: Padding(
-                            padding: const EdgeInsets.symmetric(horizontal: 16.0),
-                            child: Row(
-                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                              crossAxisAlignment: CrossAxisAlignment.center,
+                    child:
+                        _isArkWallet
+                            ? _buildUnifiedReceive()
+                            : Column(
                               children: [
-                                Expanded(
-                                  child: FittedBox(
-                                    alignment: Alignment.centerLeft,
-                                    fit: BoxFit.scaleDown,
-                                    child: Column(
-                                      crossAxisAlignment: CrossAxisAlignment.start,
+                                QrCodeInfo(
+                                  qrCaptureKey: _qrCaptureKey,
+                                  qrcodeTopWidget: Padding(
+                                    padding: const EdgeInsets.symmetric(horizontal: 16.0),
+                                    child: Row(
+                                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                      crossAxisAlignment: CrossAxisAlignment.center,
                                       children: [
-                                        Text(
-                                          t.address_list_screen.address_index(index: receiveAddressIndex),
-                                          style: CoconutTypography.body1_16.setColor(context.coconutColors.primaryText),
+                                        Expanded(
+                                          child: FittedBox(
+                                            alignment: Alignment.centerLeft,
+                                            fit: BoxFit.scaleDown,
+                                            child: Column(
+                                              crossAxisAlignment: CrossAxisAlignment.start,
+                                              children: [
+                                                Text(
+                                                  t.address_list_screen.address_index(index: receiveAddressIndex),
+                                                  style: CoconutTypography.body1_16.setColor(
+                                                    context.coconutColors.primaryText,
+                                                  ),
+                                                ),
+                                                Text(
+                                                  derivationPath,
+                                                  style: CoconutTypography.body2_14.setColor(
+                                                    context.coconutColors.secondaryText,
+                                                  ),
+                                                ),
+                                              ],
+                                            ),
+                                          ),
                                         ),
-                                        Text(
-                                          derivationPath,
-                                          style: CoconutTypography.body2_14.setColor(
-                                            context.coconutColors.secondaryText,
+                                        ShrinkAnimationButton(
+                                          onPressed: _onAddressListButtonPressed,
+                                          defaultColor: context.coconutColors.surface,
+                                          pressedOverlayColor: context.coconutColors.surfacePressOverlay,
+                                          borderRadius: 8,
+                                          child: Container(
+                                            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                                            child: Text(
+                                              t.view_all_addresses,
+                                              style: CoconutTypography.body3_12.setColor(
+                                                context.coconutColors.primaryText,
+                                              ),
+                                            ),
                                           ),
                                         ),
                                       ],
                                     ),
                                   ),
-                                ),
-                                ShrinkAnimationButton(
-                                  onPressed: _onAddressListButtonPressed,
-                                  defaultColor: context.coconutColors.surface,
-                                  pressedOverlayColor: context.coconutColors.surfacePressOverlay,
-                                  borderRadius: 8,
-                                  child: Container(
-                                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                                    child: Text(
-                                      t.view_all_addresses,
-                                      style: CoconutTypography.body3_12.setColor(context.coconutColors.primaryText),
-                                    ),
-                                  ),
+                                  qrData: qrData,
+                                  embedWidget: const CoconutLogoIcon(size: 16),
+                                  isAddress: true,
                                 ),
                               ],
                             ),
-                          ),
-                          qrData: qrData,
-                          embedWidget: const CoconutLogoIcon(size: 16),
-                          isAddress: true,
-                        ),
-                      ],
-                    ),
                   ),
                 ),
               )
               : const SizedBox(),
     );
   }
+
+  Widget _buildViewAllAddressesButton() {
+    return ShrinkAnimationButton(
+      onPressed: _onAddressListButtonPressed,
+      defaultColor: context.coconutColors.surface,
+      pressedOverlayColor: context.coconutColors.surfacePressOverlay,
+      borderRadius: 8,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        child: Text(
+          t.view_all_addresses,
+          style: CoconutTypography.body3_12.setColor(context.coconutColors.primaryText),
+        ),
+      ),
+    );
+  }
+
+  /// QR with every payment method of a hot wallet with Ark, then one row per method to copy it.
+  Widget _buildUnifiedReceive() {
+    final arkAddress = _arkAddress;
+    final isArkOpen = _arkProvider.isOpen(selectedWalletId);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        QrCodeInfo(
+          qrCaptureKey: _qrCaptureKey,
+          qrData: qrData,
+          embedWidget: const CoconutLogoIcon(size: 16),
+          showCopyText: false,
+        ),
+        CoconutLayout.spacing_500h,
+        _ReceiveMethodRow(
+          title: 'Bitcoin address',
+          subtitle: '${t.address_list_screen.address_index(index: receiveAddressIndex)} · $derivationPath',
+          trailing: _buildViewAllAddressesButton(),
+          child: CopyTextContainer(text: receiveAddress, isAddress: true, padding: const EdgeInsets.all(20)),
+        ),
+        _ReceiveMethodRow(
+          title: 'Ark address',
+          child:
+              arkAddress != null
+                  ? CopyTextContainer(
+                    text: _shorten(arkAddress),
+                    copyText: arkAddress,
+                    padding: const EdgeInsets.all(20),
+                  )
+                  : _ReceiveActionTile(
+                    text: isArkOpen ? 'Preparing an Ark address…' : 'Unlock to add Ark and Lightning',
+                    onTap: isArkOpen ? null : _unlockArk,
+                  ),
+        ),
+        _ReceiveMethodRow(
+          title: 'Lightning invoice',
+          subtitle: _lightningSubtitle(),
+          child: _buildLightningMethod(isArkOpen),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildLightningMethod(bool isArkOpen) {
+    if (_enteredReceiveAmountSats == null) {
+      return _ReceiveActionTile(text: 'Set an amount to add a Lightning invoice', onTap: _onEnterAmountTap);
+    }
+    if (_isCreatingInvoice) return const _ReceiveActionTile(text: 'Creating an invoice…');
+    if (_invoiceError != null) return _ReceiveActionTile(text: 'Try again', onTap: _createInvoice);
+    final invoice = _invoice;
+    if (invoice == null) {
+      return _ReceiveActionTile(
+        text: isArkOpen ? 'Add a Lightning invoice' : 'Unlock to add a Lightning invoice',
+        onTap: _createInvoice,
+      );
+    }
+    if (_isInvoicePaid) return const _ReceiveActionTile(text: 'Paid');
+    return CopyTextContainer(
+      text: _shorten(invoice.invoice),
+      copyText: invoice.invoice,
+      padding: const EdgeInsets.all(20),
+    );
+  }
+
+  String? _lightningSubtitle() {
+    if (_invoiceError != null) return _invoiceError;
+    final invoice = _invoice;
+    if (invoice == null) return null;
+    final unit = context.read<PreferenceProvider>().currentUnit;
+    if (_isInvoicePaid) return 'Received over Lightning';
+    return 'You receive ${unit.displayBitcoinAmount(invoice.netAmountSats, withUnit: true)} '
+        '(fee ${unit.displayBitcoinAmount(invoice.feeSats, withUnit: true, defaultWhenZero: '0', shouldCheckZero: true)})';
+  }
+
+  Future<void> _unlockArk() async {
+    final opened = await openArkWalletForSession(context, selectedWalletId, userInitiated: true);
+    if (opened && _enteredReceiveAmountSats != null) await _createInvoice();
+  }
+
+  /// Long Ark addresses and invoices are shown by their ends; the copy button copies all of it.
+  static String _shorten(String value) =>
+      value.length <= 48 ? value : '${value.substring(0, 24)}…${value.substring(value.length - 16)}';
 
   void _onAddressListButtonPressed() {
     Navigator.pushNamed(
@@ -253,10 +473,81 @@ class _ReceiveAddressScreenState extends State<ReceiveAddressScreen> {
               final walletProvider = context.read<WalletProvider>();
               _selectedWalletItem = walletProvider.walletItemList.firstWhere((e) => e.id == id);
               _receiveAddress = walletProvider.getReceiveAddress(_selectedWalletItem!.id);
+              _onArkWalletSelected();
               setState(() {});
               Navigator.pop(context);
+              if (_enteredReceiveAmountSats != null) unawaited(_createInvoice());
             },
           ),
     ).whenComplete(() => AppGuard.disablePrivacyScreen());
+  }
+}
+
+/// One payment method of the unified receive code: a title, an optional subtitle and action,
+/// and the value to copy.
+class _ReceiveMethodRow extends StatelessWidget {
+  const _ReceiveMethodRow({required this.title, required this.child, this.subtitle, this.trailing});
+
+  final String title;
+  final String? subtitle;
+  final Widget? trailing;
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 0, 16, 20),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(title, style: CoconutTypography.body2_14_Bold.setColor(context.coconutColors.primaryText)),
+                    if (subtitle != null)
+                      Text(subtitle!, style: CoconutTypography.body3_12.setColor(context.coconutColors.secondaryText)),
+                  ],
+                ),
+              ),
+              if (trailing != null) trailing!,
+            ],
+          ),
+          CoconutLayout.spacing_200h,
+          child,
+        ],
+      ),
+    );
+  }
+}
+
+/// A row in place of a value that isn't available yet, optionally tappable to get it.
+class _ReceiveActionTile extends StatelessWidget {
+  const _ReceiveActionTile({required this.text, this.onTap});
+
+  final String text;
+  final VoidCallback? onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.coconutColors;
+    return ShrinkAnimationButton(
+      onPressed: onTap ?? () {},
+      defaultColor: colors.surface,
+      pressedOverlayColor: colors.surfacePressOverlay,
+      borderRadius: CoconutStyles.radius_400,
+      child: Container(
+        width: double.infinity,
+        padding: const EdgeInsets.all(20),
+        child: Text(
+          text,
+          style: CoconutTypography.body2_14
+              .setColor(onTap != null ? colors.primaryText : colors.secondaryText)
+              .copyWith(decoration: onTap != null ? TextDecoration.underline : null),
+        ),
+      ),
+    );
   }
 }

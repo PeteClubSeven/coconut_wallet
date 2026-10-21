@@ -46,4 +46,25 @@ void main() {
       expect(isAddressWatched(address, 207), isFalse);
     });
   });
+
+  group('BIP321 receive codes', () {
+    const address = 'bcrt1q5cd3n0yp2zmk8shcxn6m3m4qhmz0hqv9jk7teaeqy5';
+    const arkAddress = 'tark1pwh9vsmezqqpjy9akejayl2vvcse6he97rn40g84xrlvrlnhayuuyefrp9nse2y3zqqpj';
+    const invoice = 'lnbcrt500u1p5j0x82sp5d0rwfh7tgrrlwsegy9rx3tzpt36cqwjqza5x4wvcjxjzscfaf6js';
+
+    test('adds the Ark address without an amount', () {
+      expect(buildBip21Uri(address, parameters: {'ark': arkAddress}), 'bitcoin:$address?ark=$arkAddress');
+    });
+
+    test('adds the amount, Ark address and Lightning invoice, and parses back', () {
+      final uri = buildBip21Uri(address, amount: 50000, parameters: {'ark': arkAddress, 'lightning': invoice});
+
+      expect(uri, 'bitcoin:$address?amount=0.0005&ark=$arkAddress&lightning=$invoice');
+      final parsed = parseBip21Uri(uri);
+      expect(parsed.address, address);
+      expect(parsed.amount, 50000);
+      expect(parsed.parameters!['ark'], arkAddress);
+      expect(parsed.parameters!['lightning'], invoice);
+    });
+  });
 }

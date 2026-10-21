@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:coconut_wallet/model/ark/ark_balance.dart';
+import 'package:coconut_wallet/model/ark/ark_lightning_invoice.dart';
 import 'package:coconut_wallet/model/ark/ark_snapshot.dart';
 import 'package:coconut_wallet/model/wallet/wallet_item_base.dart';
 import 'package:coconut_wallet/providers/wallet_provider.dart';
@@ -176,6 +177,21 @@ class ArkProvider extends ChangeNotifier {
       _syncing.remove(walletId);
       _notify();
     }
+  }
+
+  /// Creates a BOLT11 invoice for [amountSats] (bark can't make amountless ones). The payment is
+  /// claimed by the wallet's next sync, so keep [setFastSync] on while waiting for it.
+  Future<ArkLightningInvoice> createLightningInvoice(int walletId, int amountSats) async {
+    final fingerprint = _fingerprint(walletId);
+    if (fingerprint == null) throw StateError('Wallet $walletId has no Ark wallet');
+    final fee = await _arkWalletService.estimateLightningReceiveFee(fingerprint, amountSats);
+    final invoice = await _arkWalletService.createLightningInvoice(fingerprint, amountSats);
+    return ArkLightningInvoice(
+      invoice: invoice.invoice,
+      paymentHash: invoice.paymentHash,
+      amountSats: invoice.amountSats,
+      feeSats: fee.feeSats,
+    );
   }
 
   /// Syncs every few seconds while a screen waits for a payment to [walletId] (e.g. a Lightning
