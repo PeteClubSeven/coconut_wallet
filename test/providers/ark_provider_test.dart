@@ -75,6 +75,10 @@ class _FakeArkWalletService extends Fake implements ArkWalletService {
   Future<void> sync(String fingerprint) async => calls.add('sync');
 
   @override
+  Future<void> refreshDelegated(String fingerprint, List<String> vtxoIds) async =>
+      calls.add('refreshDelegated(${vtxoIds.join(',')})');
+
+  @override
   Future<ArkSnapshot> snapshot(String fingerprint, {String? address, int? addressIndex}) async {
     calls.add('snapshot(address: $address)');
     return nextSnapshot;
@@ -214,6 +218,14 @@ void main() {
 
     expect(results, [true, true]);
     expect(prompts, 1);
+  });
+
+  test('a delegated refresh is followed by a light sync', () async {
+    arkService.openWallets.add(_fingerprint.toLowerCase());
+
+    await arkProvider.refreshDelegated(1, ['a:0', 'b:1']);
+
+    expect(arkService.calls, ['refreshDelegated(a:0,b:1)', 'sync', 'snapshot(address: null)']);
   });
 
   test('watch-only wallets have no Ark side', () async {

@@ -31,7 +31,10 @@ class WalletDetailRouteArgs {
 
 class ArkWalletRouteArgs {
   final int id;
-  const ArkWalletRouteArgs({required this.id});
+
+  /// Open the VTXO page in refresh mode.
+  final bool startRefresh;
+  const ArkWalletRouteArgs({required this.id, this.startRefresh = false});
 }
 
 class UtxoOrganizerRouteArgs {

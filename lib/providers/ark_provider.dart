@@ -182,8 +182,7 @@ class ArkProvider extends ChangeNotifier {
   /// Creates a BOLT11 invoice for [amountSats] (bark can't make amountless ones). The payment is
   /// claimed by the wallet's next sync, so keep [setFastSync] on while waiting for it.
   Future<ArkLightningInvoice> createLightningInvoice(int walletId, int amountSats) async {
-    final fingerprint = _fingerprint(walletId);
-    if (fingerprint == null) throw StateError('Wallet $walletId has no Ark wallet');
+    final fingerprint = _requireFingerprint(walletId);
     final fee = await _arkWalletService.estimateLightningReceiveFee(fingerprint, amountSats);
     final invoice = await _arkWalletService.createLightningInvoice(fingerprint, amountSats);
     return ArkLightningInvoice(
@@ -192,6 +191,24 @@ class ArkProvider extends ChangeNotifier {
       amountSats: invoice.amountSats,
       feeSats: fee.feeSats,
     );
+  }
+
+  /// VTXOs bark wants refreshed now (close to expiry, or past the server's chain-depth limit).
+  Future<List<String>> vtxoIdsToRefresh(int walletId) =>
+      _arkWalletService.vtxoIdsToRefresh(_requireFingerprint(walletId));
+
+  /// The block height by which some VTXO must be refreshed, if any.
+  Future<int?> nextRequiredRefreshHeight(int walletId) =>
+      _arkWalletService.nextRequiredRefreshHeight(_requireFingerprint(walletId));
+
+  Future<int> estimateRefreshFee(int walletId, List<String> vtxoIds) async =>
+      (await _arkWalletService.estimateRefreshFee(_requireFingerprint(walletId), vtxoIds)).feeSats;
+
+  /// Refreshes [vtxoIds] in a delegated round: the server completes it without the app staying
+  /// online, and the new VTXOs arrive with a later sync.
+  Future<void> refreshDelegated(int walletId, List<String> vtxoIds) async {
+    await _arkWalletService.refreshDelegated(_requireFingerprint(walletId), vtxoIds);
+    await syncNow(walletId, maintenance: false);
   }
 
   /// Syncs every few seconds while a screen waits for a payment to [walletId] (e.g. a Lightning
@@ -254,6 +271,12 @@ class ArkProvider extends ChangeNotifier {
       if (wallet.id == walletId) return wallet;
     }
     return null;
+  }
+
+  String _requireFingerprint(int walletId) {
+    final fingerprint = _fingerprint(walletId);
+    if (fingerprint == null) throw StateError('Wallet $walletId has no Ark wallet');
+    return fingerprint;
   }
 
   String? _fingerprint(int walletId) {

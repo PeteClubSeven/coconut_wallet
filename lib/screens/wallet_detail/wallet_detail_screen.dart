@@ -178,7 +178,7 @@ class _WalletDetailScreenState extends State<WalletDetailScreen> with TickerProv
                           _buildUtxoSection(),
                           if (context.read<ArkProvider>().supportsArk(_viewModel.wallet)) ...[
                             CoconutLayout.spacing_500h,
-                            _buildArkSection(),
+                            _buildVtxoSection(),
                           ],
                         ])
                           Padding(padding: const EdgeInsets.symmetric(horizontal: 16), child: child),
@@ -537,38 +537,61 @@ class _WalletDetailScreenState extends State<WalletDetailScreen> with TickerProv
     );
   }
 
-  Widget _buildArkSection() {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text('Ark', style: CoconutTypography.body2_14_Bold.setColor(context.coconutColors.primaryText)),
-        CoconutLayout.spacing_200h,
-        Container(
-          decoration: BoxDecoration(
-            color: context.coconutColors.surface,
-            borderRadius: BorderRadius.circular(CoconutStyles.radius_200),
-          ),
-          child: Row(
-            children: [
-              Expanded(
-                child: _UtxoAction(
-                  iconPath: FeatureWalletIconPath.wallet,
-                  label: 'Ark wallet',
-                  description: 'Balance and address of this wallet on Ark',
-                  iconPadding: const EdgeInsets.all(2),
-                  isEnabled: true,
-                  onTap:
-                      () => Navigator.pushNamed(
-                        context,
-                        AppRouteNames.arkWallet,
-                        arguments: ArkWalletRouteArgs(id: widget.id),
-                      ),
-                ),
+  /// The hot wallet's VTXOs (its Ark side), next to its UTXOs. The count comes from the cache.
+  Widget _buildVtxoSection() {
+    return Consumer<ArkProvider>(
+      builder: (context, arkProvider, _) {
+        final vtxoCount = arkProvider.snapshot(widget.id)?.vtxos.length ?? 0;
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'VTXO · $vtxoCount',
+              style: CoconutTypography.body2_14_Bold.setColor(context.coconutColors.primaryText),
+            ),
+            CoconutLayout.spacing_200h,
+            Container(
+              decoration: BoxDecoration(
+                color: context.coconutColors.surface,
+                borderRadius: BorderRadius.circular(CoconutStyles.radius_200),
               ),
-            ],
-          ),
-        ),
-      ],
+              child: Row(
+                children: [
+                  Expanded(
+                    child: _UtxoAction(
+                      iconPath: CommonMenuIconPath.grid,
+                      label: 'Overview',
+                      description: 'Ark balance and VTXOs',
+                      iconPadding: const EdgeInsets.all(2),
+                      onTap:
+                          () => Navigator.pushNamed(
+                            context,
+                            AppRouteNames.arkWallet,
+                            arguments: ArkWalletRouteArgs(id: widget.id),
+                          ),
+                    ),
+                  ),
+                  Expanded(
+                    child: _UtxoAction(
+                      iconPath: CommonActionIconPath.rotate,
+                      label: 'Refresh',
+                      description: 'Renew VTXOs before they expire',
+                      iconPadding: const EdgeInsets.all(2),
+                      isEnabled: vtxoCount > 0,
+                      onTap:
+                          () => Navigator.pushNamed(
+                            context,
+                            AppRouteNames.arkWallet,
+                            arguments: ArkWalletRouteArgs(id: widget.id, startRefresh: true),
+                          ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        );
+      },
     );
   }
 
