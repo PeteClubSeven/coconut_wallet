@@ -9,6 +9,9 @@ easy bark is to integrate.
   bark opened once per app session, one combined balance, a BIP321 receive code (Bitcoin, Ark,
   Lightning), a VTXO section with delegated refresh, and Ark movements in the transaction
   history.
+- **Milestone 3:** one "Move" between the hot wallet's on-chain balance, its Ark balance and the
+  user's vaults (watch-only wallets signed with Coconut Vault), including boarding straight from
+  a vault, with each move shown as one history entry.
 
 ## Setup
 
@@ -34,9 +37,18 @@ easy bark is to integrate.
   depend on the Ark server. On restore, bark's seed recovery runs in the same open when the
   server is reachable. If it wasn't, the Ark screen offers "Retry recovery" (recreates the
   still-unused wallet).
-- **On-chain wallet:** bark runs with `onchain: null`. Moving funds between the two wallets is
-  the next milestone (board via `boardFundingAddress` + a Coconut-signed PSBT + `boardPsbt`;
-  offboard to a Coconut address).
+- **On-chain wallet:** bark runs with `onchain: null`; Coconut's wallet stays the on-chain side.
+- **Moving funds:** "Move" (replacing "Move to vault") moves between the on-chain balance, Ark
+  and vaults; one end is always the hot wallet.
+  - **On-chain or vault → Ark** reuses Coconut's send flow in a board mode: the recipient is
+    bark's `boardFundingAddress()`, Coconut builds the PSBT (its coin selection and mempool fee
+    rates) and signs it (hot wallet, or Coconut Vault over QR). Just before broadcasting,
+    Coconut registers the board with `boardPsbt(unsigned PSBT)`, so bark gets the server's
+    cosignature and leaves the broadcast to Coconut, then broadcasts it.
+  - **Ark → on-chain or vault:** `offboardAll` for everything, `sendOnchain` for an amount.
+  - **Vault → on-chain** is the vault's own send flow, receiving into the hot wallet.
+  - A move is one history entry: the Ark movement carries the on-chain transaction its
+    metadata names.
 - **Unlocking:** bark keeps the seed for as long as a wallet is open. The first time a hot
   wallet is entered after launch, Coconut asks once (biometrics or PIN, plus the passphrase for
   "enter passphrase when signing" wallets) and keeps its Ark wallet open for the rest of the
@@ -48,7 +60,7 @@ easy bark is to integrate.
 - **Sync:** bark is opened with `daemonManualSync: true` and the app drives it while in the
   foreground: `maintenanceDelegated()` every 60 s and on resume, `sync_()` every 5 s while the
   receive screen waits for a payment. Every call into a wallet runs under a per-wallet lock.
-- **One wallet:** balance screens show on-chain + Ark (the 0.7.1 fields summed; see 24); spending
+- **One wallet:** balance screens show on-chain + Ark (the 0.7.1 fields summed; see 29); spending
   and Move to Vault keep the on-chain balance. The receive QR is `bitcoin:<address>?ark=<Ark
   address>&lightning=<invoice>`, with one copy row per method. "VTXO · N" sits next to the UTXO
   section. Ark movements are merged into the recent list, the full list and the home carousel
@@ -124,65 +136,83 @@ easy bark is to integrate.
      thread), and/or have bark-ffi offer a built-in platform logger (logcat, os_log, stderr,
      file) that needs no foreign callback.
 
+9. **Boarding from a PSBT fits a host wallet well.** Coconut keeps its own coin selection,
+    fee rates (sidestepping 5) and signing, and a vault signed air-gapped can fund Ark directly.
+    The rough edges are 10–12.
+10. **Who broadcasts a board is implicit.** bark broadcasts a finalized PSBT and otherwise
+    waits for the transaction to appear (`bark/src/actions/board.rs`), with no flag saying
+    which. A board whose transaction never reaches the network stays pending indefinitely:
+    expiry is only handled once it's confirming. An explicit `broadcast: bool` and a way to
+    cancel an un-broadcast board would help.
+11. **The funding txid is pinned at `boardPsbt`.** bark only watches the txid it was given, so
+    a fee bump (RBF) would leave the funds in an output no VTXO tracks. Coconut hides fee
+    bumping on board funding transactions; CPFP remains.
+12. **Each `boardFundingAddress()` burns a key** from the same keychain as Ark addresses (gap
+    limit 250). Coconut reuses one per wallet until a board succeeds.
+
 ### Keys, custody and recovery
 
-9. **Passphrases.** bark's mnemonic path assumes an empty passphrase; callers must pass the
+13. **Passphrases.** bark's mnemonic path assumes an empty passphrase; callers must pass the
    seed as hex instead. bark-cli/barkd can't restore a passphrase wallet.
-10. **Custody model.** bark needs the seed in memory for the whole session (rounds, refresh,
+14. **Custody model.** bark needs the seed in memory for the whole session (rounds, refresh,
    mailbox). Coconut otherwise unlocks secrets only per signature, behind authentication, and
-   wipes them right after. Coconut compromises by opening bark once per app session (see 21).
-11. **Recovery is server-trusted and partial.** Without the database, history and in-flight
+   wipes them right after. Coconut compromises by opening bark once per app session (see 26).
+15. **Recovery is server-trusted and partial.** Without the database, history and in-flight
     Lightning receives are lost, and recovery depends on the server returning the VTXOs.
-12. **No "run recovery again".** Recovery runs only on the open that creates the database. If
+16. **No "run recovery again".** Recovery runs only on the open that creates the database. If
     the server was unreachable at restore time, the only retry is deleting and recreating the
     (still unused) wallet. Confirmed: after a restore with captaind down, the daemon reconnected
     once captaind was back but the balance stayed at 0 until Coconut's "Retry recovery".
 
 ### Mobile lifecycle
 
-13. **The app has to be online.** Rounds, refresh before expiry, Lightning claims and board
+17. **The app has to be online.** Rounds, refresh before expiry, Lightning claims and board
     registration need the app running. The daemon (`runDaemon`) suits a desktop process better
     than a backgrounded mobile app.
-14. **The daemon only refreshes interactively.** On a round attempt the daemon joins with
+18. **The daemon only refreshes interactively.** On a round attempt the daemon joins with
     `join_round_for_maintenance_refresh`, an interactive participation the phone has to stay
     online for (`bark/src/daemon/mod.rs`). There's no setting to make it schedule delegated
     refreshes instead, so a mobile app has to turn the daemon's syncing off
     (`daemonManualSync`) and drive `maintenanceDelegated()` itself.
     `maintenanceDelegated()` may then spend refresh fees without the user confirming; only the
     manual Refresh shows a fee first.
-15. **Lightning payments are claimed only during a sync.** `bolt11Invoice` registers the receive,
+19. **Lightning payments are claimed only during a sync.** `bolt11Invoice` registers the receive,
     and the HTLC is claimed by the next `sync()` (`try_claim_all_lightning_receives`). The
     receive screen polls with `sync_()` every 5 s; a payment made after the user leaves waits for
     the next maintenance tick or app launch.
 
 ### Observed at runtime (bark 0.7.1, bark-ffi 0.29.0)
 
-16. **Misleading open-time warning.** Right after `bark::Wallet::open`, bark-ffi checks
+20. **Misleading open-time warning.** Right after `bark::Wallet::open`, bark-ffi checks
     `ark_info()` and logs `[OPEN] Server connection FAILED - Lightning and Ark operations will not
     work!` if it isn't there yet (`src/core/wallet.rs:213`). Existing wallets and wallets created
     with `createWithoutServer` connect lazily through the daemon, so this fires on almost every
     open even though the daemon connects a moment later. The underlying error is discarded
     (`.ok()`), so a real failure would look the same.
-17. **Esplora keep-alive failures.** electrs's Esplora server closes idle keep-alive connections
+21. **Esplora keep-alive failures.** electrs's Esplora server closes idle keep-alive connections
     after 10–35 s without advertising it. bark's Esplora client (reqwest) reuses the dead pooled
     connection and fails with `hyper::Error(IncompleteMessage)` on `GET /blocks/tip/height`,
     with no retry, so roughly every other maintenance refresh fails ("Failed to join round for
     maintenance refresh"). Suggestion: a pool idle timeout shorter than common server
     keep-alives, or retrying idempotent GETs.
-18. **`stopDaemon()` returns before the daemon stops.** Deleting the datadir right after it led
+22. **`stopDaemon()` returns before the daemon stops.** Deleting the datadir right after it led
     to one more round event failing with "unable to open database" before the daemon logged its
     shutdown. The bindings also export `stopDaemonWait()`, which Coconut now uses before
     `dispose()`; the name doesn't make the difference obvious.
-19. **New databases replay every migration.** Creating a wallet runs 42 SQLite migrations one
+23. **New databases replay every migration.** Creating a wallet runs 42 SQLite migrations one
     by one: 1.2 s on the emulator normally, about 10 s under load. A schema snapshot for fresh
     databases would make wallet creation (which Coconut does inside the hot wallet's create
     flow) cheaper.
-20. **Fee fallback log units.** On regtest the fallback is logged as `falling back to 0.00001
+24. **Fee fallback log units.** On regtest the fallback is logged as `falling back to 0.00001
     sat/kvB`, which looks like a BTC/kvB value with a sat/kvB label.
+
+25. **Automatic refreshes show up as fees.** With delegated maintenance (18), bark scheduled
+    refreshes on its own: two "Refresh" entries appeared in the history (−80 sats and 0) that the
+    user never asked for.
 
 ### Keys on demand
 
-21. **The seed is needed just to sync.** Reading the mailbox (Ark receives), claiming Lightning
+26. **The seed is needed just to sync.** Reading the mailbox (Ark receives), claiming Lightning
     and even reading balances need an open wallet, and opening needs the seed. A wallet that
     unlocks keys per operation, as Coconut does, either keeps the seed in memory anyway or shows
     stale data. Coconut keeps a Realm copy of everything bark reports.
@@ -195,36 +225,51 @@ easy bark is to integrate.
 
 ### API shape (bark-ffi 0.29.0)
 
-22. **BIP321 build and parse aren't exposed.** bark has `Wallet::bip321_uri()` (on-chain + `ark=`
+27. **BIP321 build and parse aren't exposed.** bark has `Wallet::bip321_uri()` (on-chain + `ark=`
     + `lightning=` from one builder) and `parse_payment_request()` (BIP321, BOLT11, BOLT12,
     Lightning addresses, Bitcoin and Ark addresses), but bark-ffi exports neither. Coconut builds
     the URI in Dart, and a unified send would have to re-implement the parser.
-23. **Movement details are untyped.** `Movement.metadataJson` is a JSON string whose keys depend
+28. **Movement details are untyped.** `Movement.metadataJson` is a JSON string whose keys depend
     on the subsystem (`chain_anchor` for boards, `offboard_txid`, `payment_hash`, …).
     `sentToAddresses` and `receivedOnAddresses` hold JSON-encoded payment methods
     (`{"type":"ark","value":"tark1…"}`), not addresses. Status and subsystem are strings and
     timestamps are RFC 3339 strings. Pairing a board with its on-chain transaction means parsing
     the outpoint out of `chain_anchor`.
-24. **The 0.7.1 balance can count twice.** The fields come from independent lists: inputs of a
+29. **The 0.7.1 balance can count twice.** The fields come from independent lists: inputs of a
     delegated round the server hasn't picked up are both spendable and pending in round, and
     sats held by an offboard or an Ark send are in no field. Fixed on bark master (2026-09-22,
     with `Balance::total()`/`summary()`), but in no release and not in `bark_bitcoin`. Coconut
     sums the fields and accepts the over-count during a delegated refresh.
-25. **Address reuse is the host's job.** `newAddress()` derives a new key on every call, and
+30. **Address reuse is the host's job.** `newAddress()` derives a new key on every call, and
     recovery stops after `vtxo_key_gap_limit` (250) unused keys. There's no "current unused
     address", so Coconut stores the shown address and only asks for a new one after a movement
     received on it.
-26. **Use after `dispose()` crashes.** Every method clones the native pointer, so a call that
+31. **Use after `dispose()` crashes.** Every method clones the native pointer, so a call that
     starts after `dispose()` with a stale reference is a native crash, not a Dart exception. With
     a background sync loop the host has to serialize every call per wallet itself.
-27. **Lightning invoices need an amount.** `bolt11Invoice` takes a required amount, so the receive
+32. **Lightning invoices need an amount.** `bolt11Invoice` takes a required amount, so the receive
     code can only include Lightning once the user sets one.
+33. **Error messages are lost in Dart.** bark-ffi's `Error` is a uniffi `flat_error` whose
+    message follows the variant index on the wire, but the uniffi-dart reader only reads the
+    index: every bark error reaches Dart as the bare `ErrorException.inner`. Found while a board
+    broadcast failed and Coconut couldn't tell "already in utxo set" from a real failure.
+    Coconut patches the vendored bindings to return a `BarkException` with the message
+    (`third_party/bark_bitcoin/COCONUT_PATCH.md`). This is the SDK issue with the most impact
+    found so far.
+34. **A parked offboard is thrown as an error.** `offboardAll` / `sendOnchain` fail with "could
+    not complete yet (parked …); it remains pending and will be retried on wallet sync" even
+    though bark accepted the move. The host has to match the message (only possible with the
+    patch in 33) to show it as pending rather than failed.
 
 ### Test environment
 
-28. **Electrum servers.** Coconut needs Electrum `server.features`. mempool's electrs fork lacks
+35. **Electrum servers.** Coconut needs Electrum `server.features`. mempool's electrs fork lacks
     it; Blockstream electrs needs the `electrum-discovery` build feature plus
     `--electrum-public-hosts` at runtime.
+36. **A second bitcoind wallet stops block production.** The faucet stack's block generator
+    calls `getnewaddress` without naming a wallet, so once another wallet is loaded it fails
+    every tick (`-19: Multiple wallets are loaded`) and no blocks are mined until that wallet is
+    unloaded. (Faucet repo, not bark.)
 
 ## Verification results
 
@@ -248,7 +293,7 @@ Milestone 2, same setup:
 | Session unlock | Wallet 1 (app lock off) opened on entry without a prompt. Wallet 3 ("enter passphrase when signing") asked on entry; after cancelling, re-entering didn't ask again, and the VTXO page's Unlock opened it (268 ms) with its 20,000 sats |
 | Delegated only | bark logs `Daemon running in manual-sync mode; background sync disabled` and `Starting wallet maintenance in delegated mode` |
 | One balance | Header, home card and home total show 0.86844800 BTC = 0.86745 on-chain + 99,800 Ark sats. After a cold restart the home screen showed it from the cache before bark was opened |
-| Manual refresh | Fee shown first (200 sats); `Delegated round participation submitted`; the round completed in 25 s. While it waited the Ark balance read 0.000998 BTC (0.0005 spendable + 0.000498 pending in round), the double count in 24 |
+| Manual refresh | Fee shown first (200 sats); `Delegated round participation submitted`; the round completed in 25 s. While it waited the Ark balance read 0.000998 BTC (0.0005 spendable + 0.000498 pending in round), the double count in 29 |
 | Ark receive | 20,000 sats from the stack's bark CLI to the receive screen's Ark address arrived within about a second (`Received arkoor (movement 3)`), and the screen moved on to a new Ark address |
 | Lightning receive | A 30,000-sat invoice (fee 0 on regtest) paid by the stack's bark CLI was claimed by the receive screen's 5 s sync; the row switched to "Paid" |
 | History | The recent list, full list and home carousel show the Lightning receive, the Ark receive and the refresh (−200 sats) with Ark/Lightning badges; the detail screen lists the subsystem and the VTXOs spent and created |
@@ -257,26 +302,43 @@ Milestone 2, same setup:
 Not checked on the device: decoding the QR (no decoder at hand; the URI is unit-tested and the
 payments above used the shown addresses), and deleting a wallet (unit-tested).
 
+Milestone 3, same setup (Wallet 1: 0.86745 BTC on-chain + 199,720 Ark sats; a watch-only
+"vault" imported from a bitcoind descriptor):
+
+| Scenario | Result |
+|---|---|
+| Move sheet | Offers On-chain, Ark and the vault as sources (empty ones disabled) and only valid destinations for each |
+| On-chain → Ark, 0.001 BTC | The send screen shows bark's P2TR funding address as a read-only "Move to Ark" recipient, the server's minimum (20,000 sats) and "Arrives in Ark … after 3 confirmations". After signing, bark logged `funding tx not on the network yet: awaiting external funding broadcast`, then `Registered board` once it confirmed. One "Moved to Ark 0.001" entry; the total dropped by the 153-sat on-chain fee. Reopening reused the cached funding address |
+| Lost broadcast reply | The first board broadcast got an "unknown error" from Coconut's Electrum connection although the node accepted it; retries were rejected with `-27 outputs already in utxo set`, and bark's error arrived as `ErrorException.inner` (see 33). The broadcast step now checks the node for the transaction before falling back to bark, and treats "already in utxo set" as sent |
+| Ark → On-chain, 30,000 sats | `sendOnchain`: fee 2,580 sats shown first; one "Moved on-chain 0.0003" entry paired with the on-chain receive |
+| Ark → On-chain, everything | `offboardAll` on Wallet 3: 20,000 sats in, 17,470 out after a 2,530-sat fee |
+| Ark → Vault, 40,000 sats | "Sent on-chain" in the hot wallet; the vault received 0.0004 BTC |
+| Vault → Ark / Vault → On-chain | Board mode and move mode open for the vault (Send All: 39,878 sats to the funding address, "Move to Wallet 1" labels) up to Coconut Vault's unsigned QR. Signing needs the camera, so the rest is covered by unit tests (board registered with the unsigned PSBT before broadcast; nothing sent if the server refuses) |
+
 Unit tests: milestone 1 added 7 `WalletProvider` tests (Ark creation before activation,
 rollback, the missing-seed guard, conversions, deletion, startup cleanup). Milestone 2 adds 29:
 Ark models (balance total, movement kinds, linked txid, destinations, snapshot comparison), the
 Realm cache (round trip, replacement, per-wallet isolation, no write after delete, deletion with
 the wallet), `ArkProvider` (cached data while locked, sync to Realm, offline sync, cancelled
 unlock, open vs. create, shared prompt, delegated refresh), display balances, the BIP321 URI and
-the merged history order. The full suite matches the upstream v0.20.0 baseline (the same 10
-pre-existing failures).
+the merged history order. Milestone 3 adds 18: board and offboard calls (sync requested
+mid-sync, funding address reuse, parked moves), broadcasting a board (registered before the
+broadcast, nothing sent when refused, retry and fallbacks, a transaction already on the
+network), the Move sheet's pairs, and pairing moves in the history. The full suite matches the
+upstream v0.20.0 baseline (the same 10 pre-existing failures).
 
 ## Known PoC limitations
 
-- No moving funds between on-chain and Ark (board, offboard), no unified send and no exits yet.
+- No paying from Ark (Ark addresses, Lightning, BIP321 send) and no exits yet.
+- Vault → Ark and Vault → On-chain were driven on the emulator only up to Coconut Vault's QR.
 - After an upgrade, a hot wallet shows its on-chain balance only until its Ark wallet has been
   unlocked once; afterwards locked wallets show the last synced Ark data.
-- The Ark total over-counts while a delegated refresh waits for its round (24).
+- The Ark total over-counts while a delegated refresh waits for its round (29).
 - Lightning payments are claimed while the app is open (5 s on the receive screen, else the
   60 s maintenance or the next launch). Delegated maintenance may spend refresh fees without
   asking.
-- Ark rows have no memos, the home analysis widget is on-chain only, and boards/offboards aren't
-  paired with their on-chain transactions yet.
+- Ark rows have no memos and the home analysis widget is on-chain only. A board funded by a
+  vault shows as a plain send in the vault's history.
 - Strings are plain English, not localized. The reused passphrase sheet's button says "Sign".
 - "Retry recovery" is also offered on newly created wallets, whose recovery status is "not run";
   running it is harmless.
