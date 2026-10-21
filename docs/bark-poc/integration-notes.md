@@ -445,13 +445,17 @@ v0.20.0 baseline (the same 10 pre-existing failures).
 The Ark screens are built from Coconut's own widgets and mirror their closest upstream screen:
 - **Send, step 1 (recipients):** the send screen itself. It has the same app bar, swipe pages,
   keypad amount, address field, counter and tooltips. A visible "+ Add recipient" pill adds a
-  page; upstream only has a swipe to a hidden last page.
+  page; upstream only has a swipe to a hidden last page. The on-chain and Ark balances sit under
+  the field, where upstream's app bar has its UTXO pill.
 - **Send, step 2 ("Pay with"):** the confirm screen.
 - **VTXO overview:** the UTXO overview. It has the same collapsing header with the Ark balance and
   the Overview / List control. VTXOs show as coins in bucket rows, grouped by amount (the UTXO
   tiers) or by expiry (expired, a day, a week, 30 days, later), above a bar chart.
   Balance details, recovery and Refresh VTXOs are in a header menu. Recovery is on the page only
   when it failed.
+- **VTXO detail:** the UTXO detail. The expiry takes the place of the date, and the expiry row
+  can refresh just that VTXO. The wallet's VTXO tile has its own boat icon (Coconut's set has
+  none, so it's drawn in the app's line style).
 - **Movement detail:** the transaction detail.
 - **Ark → on-chain:** UTXO merge.
 - **Move sheet:** Coconut's selectable sheets.
