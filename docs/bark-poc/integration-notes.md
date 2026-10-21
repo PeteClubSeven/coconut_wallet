@@ -45,33 +45,44 @@ easy bark is to integrate.
   still-unused wallet).
 - **On-chain wallet:** bark runs with `onchain: null`; Coconut's wallet stays the on-chain side.
 - **Moving funds:** "Move" (replacing "Move to vault") moves between the on-chain balance, Ark
-  and vaults; one end is always the hot wallet.
-  - **On-chain or vault → Ark** reuses Coconut's send flow in a board mode: the recipient is
-    bark's `boardFundingAddress()`, Coconut builds the PSBT (its coin selection and mempool fee
-    rates) and signs it (hot wallet, or Coconut Vault over QR). Just before broadcasting,
-    Coconut registers the board with `boardPsbt(unsigned PSBT)`, so bark gets the server's
-    cosignature and leaves the broadcast to Coconut, then broadcasts it.
-  - **Ark → on-chain or vault:** `offboardAll` for everything, `sendOnchain` for an amount.
-  - **Vault → on-chain** is the vault's own send flow, receiving into the hot wallet.
+  and vaults; one end is always the hot wallet. A two-step sheet picks the source, then the
+  destination; without a vault it offers "Create a vault" (Coconut's add-watch-only flow). Every
+  direction then runs on Send's two steps with the destination fixed (see Paying).
+  - **On-chain or vault → Ark** pays on-chain to bark's `boardFundingAddress()`: Coconut builds
+    the PSBT (its coin selection and mempool fee rates) and signs it (hot wallet, or Coconut Vault
+    over QR). Just before broadcasting, Coconut registers the board with
+    `boardPsbt(unsigned PSBT)`, so bark gets the server's cosignature and leaves the broadcast to
+    Coconut, then broadcasts it.
+  - **Ark → on-chain or vault:** `sendOnchain` for an amount, `offboardAll` for everything (tap
+    the Ark balance).
+  - **On-chain ↔ vault** are ordinary on-chain sends to the other wallet's next address, with
+    more recipients allowed.
   - A move is one history entry: the Ark movement carries the on-chain transaction its
-    metadata names.
+    metadata names. Its detail screen shows that transaction like any other (inputs and outputs,
+    fee rate, block), looked up on the block explorer's Esplora API because Coconut's node lookup
+    can't describe the Ark server's transaction.
 - **Paying:** Send on a hot wallet with Ark (and `bitcoin:` deep links to one) has two steps.
   1. **Who and how much:**
      - One row per recipient: an Ark or Bitcoin address, a BOLT11 invoice, a Lightning address or
        a BIP321 code, with its amount. Coconut parses it itself (37) and says what it is as it's
        typed.
-     - The amount locks when the invoice or code carries one. Max (last row, on-chain) sends
-       everything left.
-     - "Add recipient" is a visible button, and what's available on-chain and in Ark is shown.
+     - The amount locks when the invoice or code carries one (0-sat invoices stay editable).
+     - What's available on-chain and in Ark is shown under the field. Tapping a balance sends
+       all of it: on-chain from the last row, or everything in Ark to a single Bitcoin or Ark
+       address. The on-chain balance can't be tapped for Ark addresses and invoices.
+     - More recipients: swipe to the dashed card, as upstream (with its first-run hint).
      - Several recipients need Bitcoin addresses: offboards and `sendOnchain` take one, so
        several are paid on-chain in one transaction.
   2. **Pay with:** one card per way to pay, with its fee. Until the user picks one, the cheapest
      is selected.
      - **Ark-funded cards** (one recipient only): `sendArkoorPayment`,
        `payLightningInvoice(wait: false)` (later syncs finish it), `payLightningAddress` and
-       `sendOnchain`. Each is paid after a confirmation and biometrics/PIN.
-     - **The on-chain card** builds the transaction from the wallet's UTXOs, with UTXO selection
-       and fee rate, then goes to Coconut's confirm screen to sign and broadcast.
+       `sendOnchain` (`offboardAll` for everything). Each is paid after biometrics/PIN, with no
+       confirmation pop-up, on a progress screen built from the broadcast screens: "Transaction
+       Sent", or "Payment pending" when it takes more than 5 s.
+     - **The on-chain card** has the send screen's controls (a UTXOs pill opening the selection
+       sheet, the fee rate with the recommended rates, the estimated fee, fee subtracted from
+       the amount), then goes to Coconut's confirm screen to sign and broadcast.
 
   Vaults and watch-only wallets keep Coconut's send screen. An Ark or Lightning code typed into
   that screen on a hot wallet goes back to step 1, along with the amount typed there.
@@ -419,6 +430,27 @@ swipe on its send screen. Results:
 Not checked on the device: Lightning addresses (the stack has no LNURL server), BOLT12 and
 LNURL (reported as unsupported), and an amountless invoice.
 
+Style notes round 2, same setup (a debug build's "Wallet 5", 2026-10-20):
+
+| Scenario | Result |
+|---|---|
+| Receive screen | Lightning first, then the Ark and Bitcoin addresses, both coloured like Coconut's addresses and shortened in the middle |
+| Everything in Ark to the wallet's own on-chain | Tapping "Available in Ark" filled 0.01164459 BTC; step 2 offered only On-chain via Ark, 0.01157171 BTC after a 7,288-sat fee |
+| Lightning invoice, 10,000 sats | Amount filled and locked, both balances untappable; "Transaction Sent" about 2 s after Pay while the CLI claimed |
+| Unclaimed Lightning invoice, 7,000 sats | "Payment pending" after 5 s; Confirm went back to the wallet, where it shows as "Sending · Lightning" |
+| On-chain card | The UTXOs pill opened Select UTXOs and then read "1 selected"; the recommended-rate bar sits between the list and the keypad; with the fee taken from the amount the recipient got 0.00099859 of 0.001 BTC |
+| Move sheet | Two steps with radio cards. Without a vault, "Create a vault" opened Add Wallet; the pasted descriptor became the vault, and back on the hot wallet its own history showed |
+| Vault → Ark, 0.005 BTC | The vault's 0.011 BTC as the only balance; on-chain card with the board note; confirm screen; Coconut Vault's unsigned QR |
+| On-chain → Vault plus a second recipient | Swiped to the dashed card for 0.001 BTC to another address; step 2 listed both, on-chain only (≈ 172 sats) |
+| Ark → Vault detail | Tx ID, "View mempool", inputs and outputs (the vault's output in the send colour), 10.02 sats/vB, block and confirmations |
+| VTXO detail | No Refresh; "Exit cost ≈ 0.00000407 BTC at 1 sat/vB"; a long press on the ID exported 298 bytes of hex, which "Import VTXO" took back ("VTXO imported") |
+
+Found on the way: upstream's input/output card re-assigns a `late final` field when its
+transaction changes, so swapping bark's record for the explorer's threw during build and drew the
+Tx ID block twice (the card is now keyed by its record). And `TransactionProvider` holds one
+transaction list for the whole app, so a wallet screen opened on top of another (the new vault)
+left its list behind; the wallet screen now reloads its own when it shows again.
+
 Unit tests: milestone 1 added 7 `WalletProvider` tests (Ark creation before activation,
 rollback, the missing-seed guard, conversions, deletion, startup cleanup). Milestone 2 adds 29:
 Ark models (balance total, movement kinds, linked txid, destinations, snapshot comparison), the
@@ -437,28 +469,36 @@ UTXOs, the on-chain fee following the amount, UTXOs and fee rate, Max with sever
 on-chain-only extra recipients, the reasons an option can't be used, the cheapest default, stale
 Ark estimates, and the hand-off to the confirm screen. Moving recipients to step 1 adds 6 for the
 recipient rules (anything payable alone, Bitcoin addresses when several, fixed amounts from
-invoices and codes, Max only last and on-chain, duplicates, more than the balance). The full suite matches the upstream
-v0.20.0 baseline (the same 10 pre-existing failures).
+invoices and codes, Max only last and on-chain, duplicates, more than the balance). Round 2 of
+the style notes adds tests for everything in Ark, moves (the source decides how to pay), the fee
+taken from the amount and the board limits. The full suite matches the upstream v0.20.0
+baseline (the same pre-existing failures, plus an Electrum end-to-end test that times out
+against the public regtest server).
 
 ### UI
 
 The Ark screens are built from Coconut's own widgets and mirror their closest upstream screen:
-- **Send, step 1 (recipients):** the send screen itself. It has the same app bar, swipe pages,
-  keypad amount, address field, counter and tooltips. A visible "+ Add recipient" pill adds a
-  page; upstream only has a swipe to a hidden last page. The on-chain and Ark balances sit under
-  the field, where upstream's app bar has its UTXO pill.
-- **Send, step 2 ("Pay with"):** the confirm screen.
+- **Send, step 1 (recipients):** the send screen itself. It has the same app bar, swipe pages
+  (and first-run swipe hint), dashed add card, keypad amount, address field, counter and
+  tooltips. The on-chain and Ark balances sit under the field, where upstream's app bar has its
+  UTXO pill, and double as its Send All. Move uses the same screen with the destination in a
+  card like step 2's.
+- **Send, step 2 ("Pay with"):** the confirm screen. The on-chain card carries the send screen's
+  UTXO pill, fee board and recommended-rate keypad bar.
+- **Paying from Ark:** the broadcasting and broadcast-complete screens (their Lottie and layout),
+  with a pending state.
 - **VTXO overview:** the UTXO overview. It has the same collapsing header with the Ark balance and
   the Overview / List control. VTXOs show as coins in bucket rows, grouped by amount (the UTXO
   tiers) or by expiry (expired, a day, a week, 30 days, later), above a bar chart.
-  Balance details, recovery and Refresh VTXOs are in a header menu. Recovery is on the page only
-  when it failed.
-- **VTXO detail:** the UTXO detail. The expiry takes the place of the date, and the expiry row
-  can refresh just that VTXO. The wallet's VTXO tile has its own boat icon (Coconut's set has
+  Balance details, recovery, Refresh VTXOs and Import VTXO are in a header menu. Recovery is on
+  the page only when it failed.
+- **VTXO detail:** the UTXO detail. The expiry takes the place of the date, and an exit cost row
+  estimates an emergency exit at the fastest recommended rate. A long press on the VTXO ID
+  exports it as hex. The wallet's VTXO tile ("Ark") has its own boat icon (Coconut's set has
   none, so it's drawn in the app's line style).
-- **Movement detail:** the transaction detail.
-- **Ark → on-chain:** UTXO merge.
-- **Move sheet:** Coconut's selectable sheets.
+- **Movement detail:** the transaction detail. Moves and payments that went on-chain also show
+  their transaction the way it does.
+- **Move sheet:** the vault-select sheet's wallet cards, with a radio mark, in two steps.
 
 The building blocks are `CoconutTextField`, `CoconutOptionPicker`, `FixedBottomButton`,
 `ShrinkAnimationButton` cards, `UnderlineButtonItemCard`, `CoconutChip` and the SVG icons. The few
@@ -476,9 +516,11 @@ bucket row are adapted copies in `lib/widgets/features/ark/vtxo_overview_widgets
 - A Lightning payment that fails after starting disappears from the history (failed movements
   with no balance change are hidden). The detail screen it opened shows "failed" while open.
 - Deep links with Ark or Lightning go to the first hot wallet with Ark; there's no wallet picker.
-- Max is on-chain only (bark's fee depends on the amount), and the fee-from-amount switch is only
-  in Coconut's send screen.
+- Everything in Ark goes to one Bitcoin or Ark address (an offboard of everything, or an Ark
+  payment of the balance less its fee); not over Lightning.
 - Vault → Ark and Vault → On-chain were driven on the emulator only up to Coconut Vault's QR.
+- The on-chain side of Ark payments to Bitcoin addresses comes from the block explorer's API, so
+  it needs the explorer to be reachable (bark's copy shows the outputs until then).
 - After an upgrade, a hot wallet shows its on-chain balance only until its Ark wallet has been
   unlocked once; afterwards locked wallets show the last synced Ark data.
 - The Ark total over-counts while a delegated refresh waits for its round (29).
