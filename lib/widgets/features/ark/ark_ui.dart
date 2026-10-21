@@ -13,6 +13,43 @@ import 'package:provider/provider.dart';
 /// Small pieces the Ark screens share, built from Coconut's own widgets and tokens so they read
 /// like the rest of the app.
 
+/// A bech32 string (Ark address, Lightning invoice) styled like Coconut's Bitcoin addresses: the
+/// prefix through the first character after the separator muted, the next four and the last four
+/// characters highlighted, and a long middle shortened with "…". The data part of bech32 has no
+/// "1", so the last "1" is the separator whatever the prefix holds (an invoice's amount).
+RichText bech32RichText(BuildContext context, String value, {int middleHead = 12, int middleTail = 12}) {
+  final colors = context.coconutColors;
+  final separator = value.lastIndexOf('1');
+  final prefixLength = separator < 0 ? 0 : (separator + 2).clamp(0, value.length);
+  if (value.length < prefixLength + 8) {
+    return RichText(text: TextSpan(text: value, style: CoconutTypography.body2_14_Bold.setColor(colors.success)));
+  }
+  final middle = value.substring(prefixLength + 4, value.length - 4);
+  final shownMiddle =
+      middle.length <= middleHead + middleTail + 1
+          ? middle
+          : '${middle.substring(0, middleHead)}…${middle.substring(middle.length - middleTail)}';
+  return RichText(
+    text: TextSpan(
+      children: [
+        TextSpan(
+          text: value.substring(0, prefixLength),
+          style: CoconutTypography.body2_14_Bold.setColor(colors.tertiaryText),
+        ),
+        TextSpan(
+          text: value.substring(prefixLength, prefixLength + 4),
+          style: CoconutTypography.body2_14_Bold.setColor(colors.success),
+        ),
+        TextSpan(text: shownMiddle, style: CoconutTypography.body2_14.setColor(colors.tertiaryText)),
+        TextSpan(
+          text: value.substring(value.length - 4),
+          style: CoconutTypography.body2_14_Bold.setColor(colors.success),
+        ),
+      ],
+    ),
+  );
+}
+
 /// A label on the left and a value on the right, for summaries inside cards.
 class ArkInfoRow extends StatelessWidget {
   const ArkInfoRow({super.key, required this.label, this.value, this.valueWidget, this.valueColor});

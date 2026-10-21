@@ -36,6 +36,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:provider/provider.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:coconut_wallet/widgets/features/ark/ark_texts.dart';
+import 'package:coconut_wallet/widgets/features/ark/ark_ui.dart';
 
 class ReceiveAddressScreen extends StatefulWidget {
   final int id;
@@ -370,19 +371,19 @@ class _ReceiveAddressScreenState extends State<ReceiveAddressScreen> {
           showCopyText: false,
         ),
         CoconutLayout.spacing_500h,
+        // Fastest first: Lightning, then Ark, then on-chain.
         _ReceiveMethodRow(
-          title: t.ark.request.bitcoin_address,
-          subtitle: '${t.address_list_screen.address_index(index: receiveAddressIndex)} · $derivationPath',
-          trailing: _buildViewAllAddressesButton(),
-          child: CopyTextContainer(text: receiveAddress, isAddress: true, padding: const EdgeInsets.all(20)),
+          title: t.ark.receive.lightning_invoice,
+          subtitle: _lightningSubtitle(),
+          child: _buildLightningMethod(isArkOpen),
         ),
         _ReceiveMethodRow(
           title: t.ark.request.ark_address,
           child:
               arkAddress != null
                   ? CopyTextContainer(
-                    text: shortenMiddle(arkAddress, head: 24, tail: 16),
-                    copyText: arkAddress,
+                    text: arkAddress,
+                    textRichText: bech32RichText(context, arkAddress),
                     padding: const EdgeInsets.all(20),
                   )
                   : isArkOpen
@@ -394,9 +395,10 @@ class _ReceiveAddressScreenState extends State<ReceiveAddressScreen> {
                   ),
         ),
         _ReceiveMethodRow(
-          title: t.ark.receive.lightning_invoice,
-          subtitle: _lightningSubtitle(),
-          child: _buildLightningMethod(isArkOpen),
+          title: t.ark.request.bitcoin_address,
+          subtitle: '${t.address_list_screen.address_index(index: receiveAddressIndex)} · $derivationPath',
+          trailing: _buildViewAllAddressesButton(),
+          child: CopyTextContainer(text: receiveAddress, isAddress: true, padding: const EdgeInsets.all(20)),
         ),
       ],
     );
@@ -424,8 +426,8 @@ class _ReceiveAddressScreenState extends State<ReceiveAddressScreen> {
     }
     if (_isInvoicePaid) return _ReceiveActionTile(text: t.ark.receive.paid);
     return CopyTextContainer(
-      text: shortenMiddle(invoice.invoice, head: 24, tail: 16),
-      copyText: invoice.invoice,
+      text: invoice.invoice,
+      textRichText: bech32RichText(context, invoice.invoice),
       padding: const EdgeInsets.all(20),
     );
   }
