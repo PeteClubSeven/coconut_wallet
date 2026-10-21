@@ -56,18 +56,22 @@ easy bark is to integrate.
   - A move is one history entry: the Ark movement carries the on-chain transaction its
     metadata names.
 - **Paying:** Send on a hot wallet with Ark (and `bitcoin:` deep links to one) has two steps.
-  1. **Recipient:** an Ark or Bitcoin address, a BOLT11 invoice, a Lightning address or a BIP321
-     code. Coconut parses it itself (37) and says what it is as it's typed.
-  2. **Amount and Pay with:** the amount (locked when the invoice or code carries one), what's
-     available on-chain and in Ark, and one card per way to pay it with its fee. Until the user
-     picks one, the cheapest is selected.
-     - **Ark-funded cards:** `sendArkoorPayment`, `payLightningInvoice(wait: false)` (later
-       syncs finish it), `payLightningAddress` and `sendOnchain`. Each is paid after a
-       confirmation and biometrics/PIN.
-     - **The on-chain card** builds the transaction from the wallet's UTXOs, with UTXO
-       selection, fee rate, Max and extra recipients, then goes to Coconut's confirm screen to
-       sign and broadcast.
-     - **Extra recipients** rule out the Ark cards: offboards and `sendOnchain` take one address.
+  1. **Who and how much:**
+     - One row per recipient: an Ark or Bitcoin address, a BOLT11 invoice, a Lightning address or
+       a BIP321 code, with its amount. Coconut parses it itself (37) and says what it is as it's
+       typed.
+     - The amount locks when the invoice or code carries one. Max (last row, on-chain) sends
+       everything left.
+     - "Add recipient" is a visible button, and what's available on-chain and in Ark is shown.
+     - Several recipients need Bitcoin addresses: offboards and `sendOnchain` take one, so
+       several are paid on-chain in one transaction.
+  2. **Pay with:** one card per way to pay, with its fee. Until the user picks one, the cheapest
+     is selected.
+     - **Ark-funded cards** (one recipient only): `sendArkoorPayment`,
+       `payLightningInvoice(wait: false)` (later syncs finish it), `payLightningAddress` and
+       `sendOnchain`. Each is paid after a confirmation and biometrics/PIN.
+     - **The on-chain card** builds the transaction from the wallet's UTXOs, with UTXO selection
+       and fee rate, then goes to Coconut's confirm screen to sign and broadcast.
 
   Vaults and watch-only wallets keep Coconut's send screen. An Ark or Lightning code typed into
   that screen on a hot wallet goes back to step 1, along with the amount typed there.
@@ -401,6 +405,17 @@ Not checked on the device: the hand-back from Coconut's send screen (its UTXO-li
 reachable in the time) and an Ark address on its own (Ark was paid through the BIP321 code).
 The first build hid the Next/Pay button behind the keyboard; it now sits above it.
 
+Then recipients and amounts moved to step 1. Upstream Coconut hides batch sends behind a sideways
+swipe on its send screen. Results:
+
+| Scenario | Result |
+|---|---|
+| Three Bitcoin recipients, one removed | Each row has its own amount, Max only on the last. An Ark address in a later row shows "Several recipients are paid on-chain: use a Bitcoin address" and Next stays off |
+| Two recipients (0.001 and 0.002 BTC) | Step 2 lists both and only On-chain (≈ 172 sats); the confirm screen shows both outputs plus change; signed and broadcast |
+| Bitcoin address with an amount | On-chain ≈ 141 sats and On-chain via Ark 2,580 sats |
+| Max on a Bitcoin address | "Everything left" on step 1; step 2 offers only On-chain with the computed amount (available − 314 sats fee) |
+| Lightning invoice, 7,000 sats | Amount locked on step 1 ("Set by the invoice"); Lightning paid on step 2, fee 35 sats |
+
 Not checked on the device: Lightning addresses (the stack has no LNURL server), BOLT12 and
 LNURL (reported as unsupported), and an amountless invoice.
 
@@ -420,7 +435,9 @@ with their movement, the stale-tip retry, and parked on-chain payments. Mileston
 the payment options: options per request kind, fixed vs entered amounts, balances with picked
 UTXOs, the on-chain fee following the amount, UTXOs and fee rate, Max with several recipients,
 on-chain-only extra recipients, the reasons an option can't be used, the cheapest default, stale
-Ark estimates, and the hand-off to the confirm screen. The full suite matches the upstream
+Ark estimates, and the hand-off to the confirm screen. Moving recipients to step 1 adds 6 for the
+recipient rules (anything payable alone, Bitcoin addresses when several, fixed amounts from
+invoices and codes, Max only last and on-chain, duplicates, more than the balance). The full suite matches the upstream
 v0.20.0 baseline (the same 10 pre-existing failures).
 
 ## Known PoC limitations
