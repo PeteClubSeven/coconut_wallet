@@ -13,6 +13,7 @@ import 'package:coconut_wallet/ui/coconut/coconut_pulldown_menu.dart';
 import 'package:coconut_wallet/utils/utxo_amount_format_util.dart';
 import 'package:coconut_wallet/utils/utxo_tier_theme.dart';
 import 'package:coconut_wallet/widgets/common/overlays/common_bottom_sheets.dart';
+import 'package:coconut_wallet/widgets/features/ark/ark_ui.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_svg/flutter_svg.dart';
@@ -237,24 +238,11 @@ class _AvailabilityChip extends StatelessWidget {
   final String amount;
 
   @override
-  Widget build(BuildContext context) {
-    final colors = context.coconutColors;
-    return Container(
-      padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(color: colors.utxoOverviewChartSurface, borderRadius: BorderRadius.circular(12)),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            t.ark.vtxo.chip(label: label, count: count),
-            style: CoconutTypography.caption_10.setColor(colors.mutedText),
-          ),
-          const SizedBox(height: 4),
-          Text(amount, style: CoconutTypography.body3_12_Number.setColor(colors.primaryText)),
-        ],
-      ),
-    );
-  }
+  Widget build(BuildContext context) => ArkBalanceBox(
+    label: t.ark.vtxo.chip(label: label, count: count),
+    amount: amount,
+    backgroundColor: context.coconutColors.utxoOverviewChartSurface,
+  );
 }
 
 class _VtxoBarChart extends StatefulWidget {

@@ -24,7 +24,10 @@ Future<bool> refreshVtxosWithConfirmation(
     final confirmed = await confirmArkAction(
       context,
       title: ids.length == 1 ? t.ark.vtxo.refresh_one : t.ark.vtxo.refresh_title(count: ids.length),
-      description: t.ark.vtxo.refresh_description(fee: formatSats(unit, fee)),
+      description:
+          ids.length == 1
+              ? t.ark.vtxo.refresh_one_description(fee: formatSats(unit, fee))
+              : t.ark.vtxo.refresh_description(fee: formatSats(unit, fee)),
     );
     if (!confirmed || !context.mounted) return false;
     await arkProvider.refreshDelegated(walletId, ids);

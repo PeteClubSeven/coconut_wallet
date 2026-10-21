@@ -66,6 +66,34 @@ class ArkChip extends StatelessWidget {
   }
 }
 
+/// A small label over an amount in a rounded box, as the UTXO overview's availability chips.
+class ArkBalanceBox extends StatelessWidget {
+  const ArkBalanceBox({super.key, required this.label, required this.amount, this.backgroundColor});
+
+  final String label;
+  final String amount;
+
+  /// Defaults to the surface colour.
+  final Color? backgroundColor;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.coconutColors;
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(color: backgroundColor ?? colors.surface, borderRadius: BorderRadius.circular(12)),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(label, style: CoconutTypography.caption_10.setColor(colors.mutedText)),
+          const SizedBox(height: 4),
+          Text(amount, style: CoconutTypography.body3_12_Number.setColor(colors.primaryText)),
+        ],
+      ),
+    );
+  }
+}
+
 /// A section title, as wallet detail's section headers.
 class ArkSectionTitle extends StatelessWidget {
   const ArkSectionTitle(this.text, {super.key, this.trailing});

@@ -114,6 +114,7 @@ class _VtxoDetailScreenState extends State<VtxoDetailScreen> {
             padding: const EdgeInsets.symmetric(horizontal: 16),
             child: Column(
               children: [
+                const SizedBox(height: 20),
                 Padding(
                   padding: const EdgeInsets.only(bottom: 28),
                   child: HighlightedInfoArea(

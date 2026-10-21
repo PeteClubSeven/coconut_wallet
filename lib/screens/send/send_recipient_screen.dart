@@ -90,7 +90,6 @@ class _RecipientRow {
 }
 
 class _SendRecipientScreenState extends State<SendRecipientScreen> {
-  static const double _appBarHeight = 60;
   static const double _pageHeight = 226;
   static const double _amountHeight = 34;
 
@@ -325,7 +324,7 @@ class _SendRecipientScreenState extends State<SendRecipientScreen> {
     return Scaffold(
       resizeToAvoidBottomInset: false,
       backgroundColor: colors.background,
-      appBar: _buildAppBar(arkAvailable),
+      appBar: _buildAppBar(),
       body: GestureDetector(
         behavior: HitTestBehavior.translucent,
         onTap: _clearFocus,
@@ -358,7 +357,10 @@ class _SendRecipientScreenState extends State<SendRecipientScreen> {
                       ],
                     ),
                   ),
-                  Padding(padding: const EdgeInsets.symmetric(horizontal: 16), child: _buildTooltips(check)),
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 16),
+                    child: Column(children: [_buildBalances(arkAvailable), _buildTooltips(check)]),
+                  ),
                 ],
               ),
             ),
@@ -384,40 +386,34 @@ class _SendRecipientScreenState extends State<SendRecipientScreen> {
     );
   }
 
-  /// The send screen's app bar: the wallet name and, in the pill under it, what's available.
-  PreferredSizeWidget _buildAppBar(int arkAvailable) {
-    final colors = context.coconutColors;
+  /// The send screen's app bar, with the wallet name; what's available is under the recipients.
+  PreferredSizeWidget _buildAppBar() {
     return CoconutAppBar.build(
       context: context,
-      height: _appBarHeight,
+      title: _walletName,
       isBottom: true,
-      backgroundColor: colors.background,
-      customTitle: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Text(_walletName, style: CoconutTypography.body1_16.setColor(colors.primaryText)),
-          CoconutLayout.spacing_50h,
-          // Both balances must stay readable, so the pill shrinks rather than cut them off.
-          FittedBox(
-            fit: BoxFit.scaleDown,
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 2.5),
-              decoration: BoxDecoration(color: colors.surfaceButton, borderRadius: BorderRadius.circular(4)),
-              child: Text(
-                // The unit once at the end, unless it's a prefix symbol (BIP-177).
-                t.ark.send
-                    .available_pill(
-                      onchain: _unit.displayBitcoinAmount(_onchainAvailableSats, withUnit: _unit.isPrefixSymbol),
-                      ark: _unit.displayBitcoinAmount(arkAvailable, withUnit: _unit.isPrefixSymbol),
-                      unit: _unit.isPrefixSymbol ? '' : _unit.symbol,
-                    )
-                    .trim(),
-                style: CoconutTypography.body3_12_Number.setColor(colors.surfaceButtonText),
-              ),
-            ),
+      backgroundColor: context.coconutColors.background,
+    );
+  }
+
+  /// What each balance has available, right under the recipient field.
+  Widget _buildBalances(int arkAvailable) {
+    return Row(
+      children: [
+        Expanded(
+          child: ArkBalanceBox(
+            label: t.ark.send.available_onchain,
+            amount: _unit.displayBitcoinAmount(_onchainAvailableSats, withUnit: true),
           ),
-        ],
-      ),
+        ),
+        CoconutLayout.spacing_200w,
+        Expanded(
+          child: ArkBalanceBox(
+            label: t.ark.send.available_ark,
+            amount: _unit.displayBitcoinAmount(arkAvailable, withUnit: true),
+          ),
+        ),
+      ],
     );
   }
 
