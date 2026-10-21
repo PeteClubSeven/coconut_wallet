@@ -1,5 +1,7 @@
-import 'package:coconut_design_system/coconut_design_system.dart' hide CoconutAppBar, CoconutPopup, CoconutToast;
+import 'package:coconut_design_system/coconut_design_system.dart'
+    hide CoconutAppBar, CoconutPopup, CoconutToast, CoconutUnderlinedButton;
 import 'package:coconut_wallet/app/router/app_route_names.dart';
+import 'package:coconut_wallet/constants/icon_path.dart';
 import 'package:coconut_wallet/design_system/context/coconut_theme_context_extension.dart';
 import 'package:coconut_wallet/enums/fiat_enums.dart';
 import 'package:coconut_wallet/localization/strings.g.dart';
@@ -14,14 +16,27 @@ import 'package:coconut_wallet/screens/ark/ark_unlock_flow.dart';
 import 'package:coconut_wallet/services/model/response/block_timestamp.dart';
 import 'package:coconut_wallet/ui/coconut/coconut_app_bar.dart';
 import 'package:coconut_wallet/ui/coconut/coconut_overlays.dart';
+import 'package:coconut_wallet/ui/coconut/coconut_underlined_button.dart';
+import 'package:coconut_wallet/utils/datetime_util.dart';
+import 'package:coconut_wallet/widgets/common/amount/animated_balance.dart';
+import 'package:coconut_wallet/widgets/common/amount/bitcoin_amount_unit.dart';
+import 'package:coconut_wallet/widgets/common/amount/fiat_price.dart';
 import 'package:coconut_wallet/widgets/common/buttons/copy_text_container.dart';
+import 'package:coconut_wallet/widgets/common/buttons/fixed_bottom_button.dart';
+import 'package:coconut_wallet/widgets/common/buttons/fixed_bottom_tween_button.dart';
+import 'package:coconut_wallet/widgets/common/buttons/shrink_animation_button.dart';
 import 'package:coconut_wallet/widgets/common/overlays/common_bottom_sheets.dart';
+import 'package:coconut_wallet/widgets/features/ark/ark_texts.dart';
+import 'package:coconut_wallet/widgets/features/ark/ark_ui.dart';
+import 'package:coconut_wallet/widgets/features/transaction/card/underline_button_item_card.dart';
+import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_svg/flutter_svg.dart';
 import 'package:provider/provider.dart';
 
-/// The Ark side of a hot wallet: its balance breakdown, recovery status and VTXOs, with
-/// delegated refresh. Reads the cache, so it works while the wallet is locked. Strings are not
-/// localized yet (proof of concept).
+/// The Ark side of a hot wallet, laid out like the UTXO list: its balance and breakdown, recovery
+/// status and VTXOs, with delegated refresh. Reads the cache, so it works while the wallet is
+/// locked.
 class VtxoOverviewScreen extends StatefulWidget {
   const VtxoOverviewScreen({super.key, required this.id, this.startRefresh = false});
 
@@ -36,15 +51,18 @@ class VtxoOverviewScreen extends StatefulWidget {
 
 class _VtxoOverviewScreenState extends State<VtxoOverviewScreen> {
   late final ArkProvider _arkProvider;
+  late BitcoinUnit _unit;
   bool _isSelecting = false;
   final Set<String> _selectedIds = {};
   bool _isRefreshing = false;
   int? _nextRefreshHeight;
+  int _shownBalance = 0;
 
   @override
   void initState() {
     super.initState();
     _arkProvider = context.read<ArkProvider>();
+    _unit = context.read<PreferenceProvider>().currentUnit;
     WidgetsBinding.instance.addPostFrameCallback((_) async {
       await _loadRefreshInfo();
       if (widget.startRefresh) await _startSelecting();
@@ -82,42 +100,33 @@ class _VtxoOverviewScreenState extends State<VtxoOverviewScreen> {
         ..clear()
         ..addAll(due);
     });
-    if (due.isEmpty) _toast('No VTXO needs a refresh yet. Select any to refresh early.');
+    if (due.isEmpty) _toast(t.ark.vtxo.none_due);
   }
+
+  void _stopSelecting() => setState(() {
+    _isSelecting = false;
+    _selectedIds.clear();
+  });
 
   Future<void> _confirmRefresh() async {
     final ids = _selectedIds.toList();
     if (ids.isEmpty) return;
-    final unit = context.read<PreferenceProvider>().currentUnit;
     setState(() => _isRefreshing = true);
     try {
       final fee = await _arkProvider.estimateRefreshFee(widget.id, ids);
       if (!mounted) return;
-      final confirmed = await showDialog<bool>(
-        context: context,
-        builder:
-            (dialogContext) => CoconutPopup(
-              languageCode: context.read<PreferenceProvider>().language,
-              title: 'Refresh ${ids.length} VTXO${ids.length == 1 ? '' : 's'}?',
-              description:
-                  'The Ark server moves them into new VTXOs in its next round, without this app having to stay '
-                  'open (a delegated refresh). Fee: ${_amount(unit, fee)}.',
-              leftButtonText: t.cancel,
-              rightButtonText: t.confirm,
-              onTapLeft: () => Navigator.pop(dialogContext, false),
-              onTapRight: () => Navigator.pop(dialogContext, true),
-            ),
+      final confirmed = await confirmArkAction(
+        context,
+        title: t.ark.vtxo.refresh_title(count: ids.length),
+        description: t.ark.vtxo.refresh_description(fee: formatSats(_unit, fee)),
       );
-      if (confirmed != true || !mounted) return;
+      if (!confirmed || !mounted) return;
       await _arkProvider.refreshDelegated(widget.id, ids);
       if (!mounted) return;
-      setState(() {
-        _isSelecting = false;
-        _selectedIds.clear();
-      });
-      _toast('Refresh scheduled for the next round');
+      _stopSelecting();
+      _toast(t.ark.vtxo.refresh_scheduled);
     } catch (error) {
-      if (mounted) _toast('Refresh failed: $error');
+      if (mounted) _toast(t.ark.vtxo.refresh_failed(error: '$error'));
     } finally {
       if (mounted) setState(() => _isRefreshing = false);
     }
@@ -132,103 +141,157 @@ class _VtxoOverviewScreenState extends State<VtxoOverviewScreen> {
 
   void _toast(String text) => CoconutToast.showBottomToast(context: context, text: text);
 
-  static String _amount(BitcoinUnit unit, int sats) =>
-      unit.displayBitcoinAmount(sats, withUnit: true, shouldCheckZero: true, defaultWhenZero: '0 ${unit.symbol}');
+  void _toggleUnit() => setState(() => _unit = _unit.isBasedOnSatoshi ? BitcoinUnit.btc : BitcoinUnit.sats);
 
   @override
   Widget build(BuildContext context) {
-    final unit = context.select<PreferenceProvider, BitcoinUnit>((provider) => provider.currentUnit);
+    final colors = context.coconutColors;
     return Consumer<ArkProvider>(
       builder: (context, arkProvider, _) {
         final snapshot = arkProvider.snapshot(widget.id);
         final isOpen = arkProvider.isOpen(widget.id);
         final isBusy = arkProvider.isOpening(widget.id) || arkProvider.isSyncing(widget.id);
+        final hasVtxos = snapshot != null && snapshot.vtxos.isNotEmpty;
         return Scaffold(
-          backgroundColor: context.coconutColors.background,
+          backgroundColor: colors.background,
           appBar: CoconutAppBar.build(
             context: context,
-            title: _isSelecting ? 'Select VTXOs to refresh' : 'VTXOs',
-            backgroundColor: context.coconutColors.background,
+            title: _isSelecting ? t.ark.vtxo.select_title : t.ark.vtxo.title,
+            backgroundColor: colors.background,
           ),
           body: SafeArea(
-            child: ValueListenableBuilder<BlockTimestamp?>(
-              valueListenable: context.read<NodeProvider>().currentBlockNotifier,
-              builder: (context, tip, _) {
-                return RefreshIndicator(
-                  onRefresh: () => arkProvider.syncNow(widget.id),
-                  child: ListView(
-                    padding: const EdgeInsets.fromLTRB(16, 8, 16, 120),
-                    children: [
-                      if (!isOpen) _buildLockedBanner(isBusy),
-                      if (snapshot == null)
-                        _muted(isOpen ? 'Syncing…' : 'Nothing synced yet.')
-                      else ...[
-                        if (!_isSelecting) ...[
-                          _buildSummary(snapshot, unit, tip?.height),
-                          CoconutLayout.spacing_500h,
-                          _buildRecovery(snapshot, canRetry: isOpen && !isBusy && snapshot.canRetryRecovery),
-                          CoconutLayout.spacing_500h,
-                        ],
-                        _buildVtxoList(snapshot, unit, tip?.height),
+            child: Stack(
+              children: [
+                ValueListenableBuilder<BlockTimestamp?>(
+                  valueListenable: context.read<NodeProvider>().currentBlockNotifier,
+                  builder: (context, tip, _) {
+                    return CustomScrollView(
+                      physics: const AlwaysScrollableScrollPhysics(parent: BouncingScrollPhysics()),
+                      slivers: [
+                        CupertinoSliverRefreshControl(onRefresh: () => arkProvider.syncNow(widget.id)),
+                        SliverPadding(
+                          padding: const EdgeInsets.fromLTRB(16, 0, 16, 160),
+                          sliver: SliverList(
+                            delegate: SliverChildListDelegate([
+                              if (!_isSelecting) ...[
+                                _buildHeader(snapshot?.balance.total ?? 0),
+                                if (!isOpen) ...[
+                                  ArkNoticeCard(
+                                    title: t.ark.vtxo.locked_title,
+                                    description: t.ark.vtxo.locked_description,
+                                    iconPath: CommonSecurityIconPath.lock,
+                                    actionText: isBusy ? null : t.ark.send.unlock,
+                                    onAction: _ensureOpen,
+                                  ),
+                                  CoconutLayout.spacing_400h,
+                                ],
+                                if (snapshot != null) ...[
+                                  _buildBreakdown(snapshot, tip?.height),
+                                  CoconutLayout.spacing_400h,
+                                  _buildRecovery(snapshot, canRetry: isOpen && !isBusy && snapshot.canRetryRecovery),
+                                  CoconutLayout.spacing_500h,
+                                ],
+                              ],
+                              if (snapshot == null)
+                                _buildEmpty(isOpen ? t.ark.vtxo.syncing : t.ark.vtxo.nothing_synced)
+                              else
+                                _buildVtxoList(snapshot, tip?.height),
+                            ]),
+                          ),
+                        ),
                       ],
-                    ],
-                  ),
-                );
-              },
+                    );
+                  },
+                ),
+                if (hasVtxos && _isSelecting)
+                  FixedBottomTweenButton(
+                    leftText: t.cancel,
+                    rightText: _isRefreshing ? t.ark.vtxo.refreshing : t.ark.vtxo.refresh_n(count: _selectedIds.length),
+                    leftButtonClicked: _isRefreshing ? () {} : _stopSelecting,
+                    rightButtonClicked: _confirmRefresh,
+                    isRightButtonActive: !_isRefreshing && _selectedIds.isNotEmpty,
+                  )
+                else if (hasVtxos)
+                  FixedBottomButton(onButtonClicked: _startSelecting, text: t.ark.vtxo.refresh, isActive: !isBusy),
+              ],
             ),
           ),
-          bottomNavigationBar: snapshot == null || snapshot.vtxos.isEmpty ? null : _buildBottomBar(isBusy),
         );
       },
     );
   }
 
-  Widget _buildLockedBanner(bool isBusy) {
+  /// The Ark balance, like the UTXO list's "Total Balance" header.
+  Widget _buildHeader(int total) {
+    final colors = context.coconutColors;
+    final previous = _shownBalance;
+    _shownBalance = total;
     return Padding(
-      padding: const EdgeInsets.only(bottom: 20),
+      padding: const EdgeInsets.only(left: 4, top: 28, right: 4, bottom: 24),
       child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          _muted('Locked: showing the last synced data. Unlock to sync and refresh.'),
-          CoconutLayout.spacing_200h,
-          _button('Unlock', isBusy ? null : _ensureOpen),
+          Text(t.ark.vtxo.ark_balance, style: CoconutTypography.body1_16_Bold.setColor(colors.primaryText)),
+          CoconutLayout.spacing_100h,
+          GestureDetector(
+            onTap: _toggleUnit,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                IntrinsicWidth(
+                  child: BitcoinAmountUnit(
+                    currentUnit: _unit,
+                    unitStyle: CoconutTypography.heading4_18_Number.setColor(colors.primaryText),
+                    child: Expanded(
+                      child: FittedBox(
+                        alignment: Alignment.centerLeft,
+                        fit: BoxFit.scaleDown,
+                        child: AnimatedBalance(
+                          prevValue: previous,
+                          value: total,
+                          currentUnit: _unit,
+                          textStyle: CoconutTypography.heading2_28_NumberBold.setColor(colors.primaryText),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+                CoconutLayout.spacing_50h,
+                FiatPrice(satoshiAmount: total),
+              ],
+            ),
+          ),
         ],
       ),
     );
   }
 
-  Widget _buildSummary(ArkSnapshot snapshot, BitcoinUnit unit, int? tipHeight) {
-    final balance = snapshot.balance;
+  Widget _buildBreakdown(ArkSnapshot snapshot, int? tipHeight) {
+    final colors = context.coconutColors;
     final earliestExpiry =
         snapshot.vtxos.isEmpty ? null : snapshot.vtxos.map((vtxo) => vtxo.expiryHeight).reduce((a, b) => a < b ? a : b);
-    return Container(
-      padding: const EdgeInsets.all(20),
-      decoration: BoxDecoration(
-        color: context.coconutColors.surface,
-        borderRadius: BorderRadius.circular(CoconutStyles.radius_400),
-      ),
+    final syncError = _arkProvider.syncError(widget.id);
+    return ArkCard(
       child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          _label('Ark balance'),
-          Text(
-            _amount(unit, balance.total),
-            style: CoconutTypography.heading3_21_NumberBold.setColor(context.coconutColors.primaryText),
-          ),
-          CoconutLayout.spacing_300h,
-          ..._breakdown(balance).map((entry) => _row(entry.$1, _amount(unit, entry.$2))),
-          CoconutLayout.spacing_300h,
+          for (final (label, sats) in _breakdown(snapshot.balance))
+            if (sats != 0 || label == t.ark.vtxo.spendable) ArkInfoRow(label: label, value: formatSats(_unit, sats)),
+          CoconutLayout.spacing_200h,
+          Divider(color: colors.divider, height: 1),
+          CoconutLayout.spacing_200h,
           if (_nextRefreshHeight != null)
-            _row('Refresh due', _blocks(_nextRefreshHeight!, tipHeight))
+            ArkInfoRow(label: t.ark.vtxo.refresh_due, value: _blocks(_nextRefreshHeight!, tipHeight))
           else if (earliestExpiry != null)
-            _row('Earliest expiry', _blocks(earliestExpiry, tipHeight)),
-          if (snapshot.syncedAt != null) _row('Last synced', _time(snapshot.syncedAt!)),
-          if (_arkProvider.syncError(widget.id) != null) ...[
-            CoconutLayout.spacing_200h,
-            Text(
-              _arkProvider.syncError(widget.id)!,
-              style: CoconutTypography.body3_12.setColor(context.coconutColors.danger),
+            ArkInfoRow(label: t.ark.vtxo.earliest_expiry, value: _blocks(earliestExpiry, tipHeight)),
+          if (snapshot.syncedAt != null)
+            ArkInfoRow(
+              label: t.ark.vtxo.last_synced,
+              value: DateTimeUtil.formatTimestamp(snapshot.syncedAt!).join(' '),
             ),
+          if (syncError != null) ...[
+            CoconutLayout.spacing_200h,
+            Text(syncError, style: CoconutTypography.body3_12.setColor(colors.danger)),
           ],
         ],
       ),
@@ -236,126 +299,173 @@ class _VtxoOverviewScreenState extends State<VtxoOverviewScreen> {
   }
 
   List<(String, int)> _breakdown(ArkBalance balance) => [
-    ('Spendable', balance.spendable),
-    ('Pending in round', balance.pendingInRound),
-    ('Pending board', balance.pendingBoard),
-    ('Pending Lightning send', balance.pendingLightningSend),
-    ('Claimable Lightning receive', balance.claimableLightningReceive),
-    ('Pending exit', balance.pendingExit),
+    (t.ark.vtxo.spendable, balance.spendable),
+    (t.ark.vtxo.pending_in_round, balance.pendingInRound),
+    (t.ark.vtxo.pending_board, balance.pendingBoard),
+    (t.ark.vtxo.pending_lightning_send, balance.pendingLightningSend),
+    (t.ark.vtxo.claimable_lightning_receive, balance.claimableLightningReceive),
+    (t.ark.vtxo.pending_exit, balance.pendingExit),
   ];
 
   Widget _buildRecovery(ArkSnapshot snapshot, {required bool canRetry}) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        _label('Recovery'),
-        _muted(snapshot.recovery.description),
-        if (canRetry) ...[CoconutLayout.spacing_200h, _button('Retry recovery', _retryRecovery)],
-      ],
+    final colors = context.coconutColors;
+    final state = switch (snapshot.recovery.state) {
+      ArkRecoveryState.notRun => t.ark.vtxo.recovery_not_run,
+      ArkRecoveryState.completed => t.ark.vtxo.recovery_completed,
+      ArkRecoveryState.failed => t.ark.vtxo.recovery_failed,
+    };
+    return ArkCard(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          ArkInfoRow(label: t.ark.vtxo.recovery, value: state),
+          CoconutLayout.spacing_100h,
+          // bark's own report (counts and amounts), as cached.
+          Text(snapshot.recovery.description, style: CoconutTypography.body3_12.setColor(colors.secondaryText)),
+          if (canRetry) ...[
+            CoconutLayout.spacing_300h,
+            Align(
+              alignment: Alignment.centerLeft,
+              child: CoconutUnderlinedButton(
+                text: t.ark.vtxo.retry_recovery,
+                textStyle: CoconutTypography.body3_12_Bold,
+                padding: EdgeInsets.zero,
+                onTap: _retryRecovery,
+              ),
+            ),
+          ],
+        ],
+      ),
     );
   }
 
-  Widget _buildVtxoList(ArkSnapshot snapshot, BitcoinUnit unit, int? tipHeight) {
+  Widget _buildVtxoList(ArkSnapshot snapshot, int? tipHeight) {
     final vtxos = List<ArkVtxo>.of(snapshot.vtxos)..sort((a, b) => a.expiryHeight.compareTo(b.expiryHeight));
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        _label('VTXO · ${vtxos.length}'),
-        if (vtxos.isEmpty) _muted('No VTXOs.'),
-        for (final vtxo in vtxos) _buildVtxoRow(vtxo, unit, tipHeight),
+        ArkSectionTitle(t.ark.vtxo.list_title(count: vtxos.length)),
+        if (vtxos.isEmpty) _buildEmpty(t.ark.vtxo.empty),
+        for (final vtxo in vtxos) ...[_buildVtxoCard(vtxo, tipHeight), CoconutLayout.spacing_200h],
       ],
     );
   }
 
-  Widget _buildVtxoRow(ArkVtxo vtxo, BitcoinUnit unit, int? tipHeight) {
-    final isSelected = _selectedIds.contains(vtxo.id);
+  Widget _buildEmpty(String text) {
     final colors = context.coconutColors;
     return Padding(
-      padding: const EdgeInsets.only(top: 8),
-      child: Material(
-        color: colors.surface,
-        borderRadius: BorderRadius.circular(CoconutStyles.radius_300),
-        child: InkWell(
-          borderRadius: BorderRadius.circular(CoconutStyles.radius_300),
-          onTap:
-              _isSelecting
-                  ? (vtxo.isLocked
-                      ? null
-                      : () => setState(() => isSelected ? _selectedIds.remove(vtxo.id) : _selectedIds.add(vtxo.id)))
-                  : () => _showVtxoDetails(vtxo, unit, tipHeight),
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-            child: Row(
-              children: [
-                if (_isSelecting) ...[
-                  Icon(
-                    isSelected ? Icons.check_circle : Icons.radio_button_unchecked,
-                    size: 20,
-                    color: vtxo.isLocked ? colors.iconDisabled : colors.iconPrimary,
-                  ),
-                  CoconutLayout.spacing_300w,
-                ],
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        _amount(unit, vtxo.amountSats),
-                        style: CoconutTypography.body1_16_Number.setColor(colors.primaryText),
-                      ),
-                      Text(
-                        'Expires ${_blocks(vtxo.expiryHeight, tipHeight)}',
-                        style: CoconutTypography.body3_12.setColor(colors.secondaryText),
-                      ),
-                    ],
-                  ),
-                ),
-                _badge(vtxo.isLocked ? 'Locked' : 'Spendable', highlighted: !vtxo.isLocked),
-              ],
+      padding: const EdgeInsets.symmetric(vertical: 60),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          SvgPicture.asset(
+            CommonStateIconPath.searchNotFound,
+            width: 16,
+            colorFilter: ColorFilter.mode(colors.iconSecondary, BlendMode.srcIn),
+          ),
+          CoconutLayout.spacing_200w,
+          Text(text, style: CoconutTypography.body3_12.setColor(colors.secondaryText)),
+        ],
+      ),
+    );
+  }
+
+  /// One VTXO, as the UTXO list's item card: expiry and amount, then its id and state.
+  Widget _buildVtxoCard(ArkVtxo vtxo, int? tipHeight) {
+    final colors = context.coconutColors;
+    final isSelected = _selectedIds.contains(vtxo.id);
+    return Opacity(
+      opacity: _isSelecting && vtxo.isLocked ? 0.5 : 1,
+      child: ShrinkAnimationButton(
+        onPressed: () {
+          if (!_isSelecting) {
+            _showVtxoDetails(vtxo, tipHeight);
+          } else if (!vtxo.isLocked) {
+            setState(() => isSelected ? _selectedIds.remove(vtxo.id) : _selectedIds.add(vtxo.id));
+          }
+        },
+        defaultColor: colors.surface,
+        pressedOverlayColor: colors.surfacePressOverlay,
+        pressedOverlayOpacity: colors.surfacePressOverlayOpacity,
+        borderRadius: CoconutStyles.radius_300,
+        borderWidth: 0,
+        child: Container(
+          decoration: BoxDecoration(
+            border: Border.all(
+              color:
+                  _isSelecting
+                      ? (isSelected ? colors.borderStrong : colors.borderStrong.withAlpha(40))
+                      : Colors.transparent,
             ),
+            borderRadius: BorderRadius.circular(CoconutStyles.radius_300),
+          ),
+          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  if (_isSelecting) ...[
+                    SvgPicture.asset(
+                      CommonFormIconPath.circleCheck,
+                      width: 20,
+                      height: 20,
+                      colorFilter: ColorFilter.mode(
+                        isSelected ? colors.borderStrong : colors.borderStrong.withAlpha(40),
+                        BlendMode.srcIn,
+                      ),
+                    ),
+                    CoconutLayout.spacing_100w,
+                  ],
+                  Text(
+                    _blocks(vtxo.expiryHeight, tipHeight),
+                    style: CoconutTypography.body3_12_Number.setColor(colors.secondaryText),
+                  ),
+                  CoconutLayout.spacing_200w,
+                  Expanded(
+                    child: Align(
+                      alignment: Alignment.centerRight,
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          if (vtxo.isLocked) ...[
+                            SvgPicture.asset(
+                              CommonSecurityIconPath.lock,
+                              width: 16,
+                              height: 16,
+                              colorFilter: ColorFilter.mode(colors.iconPrimary, BlendMode.srcIn),
+                            ),
+                            const SizedBox(width: 4),
+                          ],
+                          Text(
+                            _unit.displayBitcoinAmount(vtxo.amountSats),
+                            style: CoconutTypography.heading4_18_NumberBold.setColor(colors.primaryText),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+              CoconutLayout.spacing_100h,
+              Text(
+                shortenMiddle(vtxo.id, head: 18, tail: 12),
+                style: CoconutTypography.body2_14_Number.setColor(colors.secondaryText).copyWith(height: 1.3),
+              ),
+              if (vtxo.isLocked) ...[CoconutLayout.spacing_150h, ArkChip(t.ark.vtxo.locked)],
+            ],
           ),
         ),
       ),
     );
   }
 
-  Widget? _buildBottomBar(bool isBusy) {
-    return SafeArea(
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
-        child:
-            _isSelecting
-                ? Row(
-                  children: [
-                    Expanded(
-                      child: _button(
-                        t.cancel,
-                        _isRefreshing
-                            ? null
-                            : () => setState(() {
-                              _isSelecting = false;
-                              _selectedIds.clear();
-                            }),
-                      ),
-                    ),
-                    CoconutLayout.spacing_300w,
-                    Expanded(
-                      child: _button(
-                        _isRefreshing ? 'Refreshing…' : 'Refresh ${_selectedIds.length}',
-                        _isRefreshing || _selectedIds.isEmpty ? null : _confirmRefresh,
-                      ),
-                    ),
-                  ],
-                )
-                : _button('Refresh VTXOs', isBusy ? null : _startSelecting),
-      ),
-    );
-  }
-
-  void _showVtxoDetails(ArkVtxo vtxo, BitcoinUnit unit, int? tipHeight) {
+  void _showVtxoDetails(ArkVtxo vtxo, int? tipHeight) {
+    final colors = context.coconutColors;
+    TextStyle valueStyle() => CoconutTypography.body2_14_Number.setColor(colors.primaryText);
     CommonBottomSheets.showBottomSheet(
       context: context,
-      title: 'VTXO',
+      title: t.ark.vtxo.detail_title,
       screenName: '${AppRouteNames.arkWallet}/vtxo',
       showCloseButton: true,
       child: Padding(
@@ -364,13 +474,29 @@ class _VtxoOverviewScreenState extends State<VtxoOverviewScreen> {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            CopyTextContainer(text: vtxo.id),
-            CoconutLayout.spacing_300h,
-            _row('Amount', _amount(unit, vtxo.amountSats)),
-            _row('Expiry', 'block ${vtxo.expiryHeight} (${_blocks(vtxo.expiryHeight, tipHeight)})'),
-            _row('State', vtxo.isLocked ? 'Locked by an operation in progress' : 'Spendable'),
-            _row('Kind', vtxo.kind),
-            _row('Exit depth', '${vtxo.exitDepth}'),
+            CopyTextContainer(text: vtxo.id, textStyle: valueStyle()),
+            CoconutLayout.spacing_500h,
+            UnderlineButtonItemCard(
+              label: t.ark.vtxo.amount,
+              child: Text(formatSats(_unit, vtxo.amountSats), style: valueStyle()),
+            ),
+            UnderlineButtonItemCard(
+              label: t.ark.vtxo.expiry,
+              child: Text(
+                '${t.ark.vtxo.at_block(height: vtxo.expiryHeight)} · ${_blocks(vtxo.expiryHeight, tipHeight)}',
+                style: valueStyle(),
+              ),
+            ),
+            UnderlineButtonItemCard(
+              label: t.ark.vtxo.state,
+              child: Text(vtxo.isLocked ? t.ark.vtxo.state_locked : t.ark.vtxo.spendable, style: valueStyle()),
+            ),
+            UnderlineButtonItemCard(label: t.ark.vtxo.kind, child: Text(vtxo.kind, style: valueStyle())),
+            UnderlineButtonItemCard(
+              label: t.ark.vtxo.exit_depth,
+              showDivider: false,
+              child: Text('${vtxo.exitDepth}', style: valueStyle()),
+            ),
           ],
         ),
       ),
@@ -378,52 +504,9 @@ class _VtxoOverviewScreenState extends State<VtxoOverviewScreen> {
   }
 
   static String _blocks(int height, int? tipHeight) {
-    if (tipHeight == null) return 'at block $height';
+    if (tipHeight == null) return t.ark.vtxo.at_block(height: height);
     final left = height - tipHeight;
-    if (left <= 0) return 'expired (block $height)';
-    return 'in $left blocks';
+    if (left <= 0) return t.ark.vtxo.expired;
+    return t.ark.vtxo.in_blocks(count: left);
   }
-
-  static String _time(DateTime time) {
-    final local = time.toLocal();
-    String two(int value) => value.toString().padLeft(2, '0');
-    return '${local.year}-${two(local.month)}-${two(local.day)} ${two(local.hour)}:${two(local.minute)}';
-  }
-
-  Widget _label(String text) => Padding(
-    padding: const EdgeInsets.only(bottom: 4),
-    child: Text(text, style: CoconutTypography.body2_14_Bold.setColor(context.coconutColors.primaryText)),
-  );
-
-  Widget _muted(String text) =>
-      Text(text, style: CoconutTypography.body2_14.setColor(context.coconutColors.secondaryText));
-
-  Widget _row(String label, String value) => Padding(
-    padding: const EdgeInsets.symmetric(vertical: 2),
-    child: Row(
-      children: [
-        Expanded(child: Text(label, style: CoconutTypography.body3_12.setColor(context.coconutColors.secondaryText))),
-        Text(value, style: CoconutTypography.body3_12_Number.setColor(context.coconutColors.primaryText)),
-      ],
-    ),
-  );
-
-  Widget _badge(String text, {required bool highlighted}) => Container(
-    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-    decoration: BoxDecoration(
-      color: highlighted ? context.coconutColors.surfaceMuted : Colors.transparent,
-      border: Border.all(color: context.coconutColors.surfaceMuted),
-      borderRadius: BorderRadius.circular(CoconutStyles.radius_100),
-    ),
-    child: Text(text, style: CoconutTypography.caption_10.setColor(context.coconutColors.secondaryText)),
-  );
-
-  Widget _button(String text, VoidCallback? onPressed) => CoconutButton(
-    text: text,
-    isActive: onPressed != null,
-    onPressed: onPressed ?? () {},
-    height: 48,
-    backgroundColor: context.coconutColors.surfaceButton,
-    foregroundColor: context.coconutColors.surfaceButtonText,
-  );
 }
