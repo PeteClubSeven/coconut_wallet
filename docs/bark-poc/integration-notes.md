@@ -529,8 +529,9 @@ bucket row are adapted copies in `lib/widgets/features/ark/vtxo_overview_widgets
   asking.
 - Ark rows have no memos and the home analysis widget is on-chain only. A board funded by a
   vault shows as a plain send in the vault's history.
-- The Ark strings are in an `ark` namespace in every locale file, in English for now (not yet
-  translated). The reused passphrase sheet's button says "Sign".
+- The Ark strings are in an `ark` namespace in every locale file: Korean in `ko` (a first pass that
+  follows Coconut's Korean wording, for a native speaker to review), English in `en`, and the
+  English copied into `ja`, `es` and `de` for now. The reused passphrase sheet's button says "Sign".
 - "Retry recovery" (in the VTXO overview's menu) is also offered on newly created wallets, whose
   recovery status is "not run"; running it is harmless.
 - Step 1 of send has no address board (own wallets): Move covers those.
