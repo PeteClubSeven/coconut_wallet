@@ -37,6 +37,12 @@ class ArkWalletRouteArgs {
   const ArkWalletRouteArgs({required this.id, this.startRefresh = false});
 }
 
+class ArkToOnchainRouteArgs {
+  final int id;
+  final int destinationWalletId;
+  const ArkToOnchainRouteArgs({required this.id, required this.destinationWalletId});
+}
+
 class ArkMovementDetailRouteArgs {
   final int id;
   final int movementId;
