@@ -1,6 +1,13 @@
 import 'package:coconut_design_system/coconut_design_system.dart'
     hide CoconutAppBar, CoconutToolTip, CoconutTooltipType, CoconutTooltipState, CoconutToast, CoconutPopup;
 import 'package:coconut_wallet/constants/icon_path.dart';
+import 'package:coconut_wallet/app/router/app_route_names.dart';
+import 'package:coconut_wallet/services/fee_service.dart';
+import 'package:coconut_wallet/utils/logger.dart';
+import 'package:coconut_wallet/utils/vibration_util.dart';
+import 'package:coconut_wallet/widgets/common/overlays/common_bottom_sheets.dart';
+import 'package:coconut_wallet/widgets/features/ark/ark_texts.dart';
+import 'package:coconut_wallet/widgets/features/ark/ark_ui.dart';
 import 'package:coconut_wallet/design_system/context/coconut_theme_context_extension.dart';
 import 'package:coconut_wallet/enums/fiat_enums.dart';
 import 'package:coconut_wallet/localization/strings.g.dart';
@@ -9,7 +16,6 @@ import 'package:coconut_wallet/providers/ark_provider.dart';
 import 'package:coconut_wallet/providers/node_provider/node_provider.dart';
 import 'package:coconut_wallet/providers/preferences/preference_provider.dart';
 import 'package:coconut_wallet/screens/ark/ark_unlock_flow.dart';
-import 'package:coconut_wallet/screens/ark/vtxo_refresh_flow.dart';
 import 'package:coconut_wallet/services/model/response/block_timestamp.dart';
 import 'package:coconut_wallet/ui/coconut/coconut_app_bar.dart';
 import 'package:coconut_wallet/widgets/common/amount/bitcoin_amount_unit.dart';
@@ -42,8 +48,11 @@ class _VtxoDetailScreenState extends State<VtxoDetailScreen> {
   Offset _tooltipIconPosition = Offset.zero;
   Size _tooltipIconSize = Size.zero;
   bool _isTooltipVisible = false;
-  bool _isRefreshing = false;
   late BitcoinUnit _unit;
+
+  /// What exiting this VTXO on its own would cost, at the fastest recommended fee rate.
+  ({int feeSats, int feeRate})? _exitCost;
+  bool _isEstimatingExit = false;
 
   @override
   void initState() {
@@ -57,18 +66,70 @@ class _VtxoDetailScreenState extends State<VtxoDetailScreen> {
         _tooltipIconSize = box.size;
       });
     });
+    _estimateExitCost();
   }
 
   void _toggleUnit() => setState(() => _unit = _unit.next);
 
-  Future<void> _refresh(ArkVtxo vtxo) async {
-    if (!await openArkWalletForSession(context, widget.id, userInitiated: true) || !mounted) return;
-    setState(() => _isRefreshing = true);
+  /// Prices a unilateral exit of this VTXO with bark, at the fastest recommended rate. Needs the
+  /// Ark wallet open; while it's locked the row shows a dash.
+  Future<void> _estimateExitCost() async {
+    final arkProvider = context.read<ArkProvider>();
+    if (!arkProvider.isOpen(widget.id)) return;
+    setState(() => _isEstimatingExit = true);
     try {
-      await refreshVtxosWithConfirmation(context, walletId: widget.id, ids: [vtxo.id], unit: _unit);
+      final fees = await FeeService().getRecommendedFees();
+      final feeRate = (fees?.fastestFee ?? 1).ceil().clamp(1, 1 << 20);
+      final feeSats = await arkProvider.estimateExitFee(widget.id, widget.vtxo.id, feeRate);
+      if (mounted) setState(() => _exitCost = (feeSats: feeSats, feeRate: feeRate));
+    } catch (error) {
+      Logger.error('VtxoDetailScreen: exit fee estimate failed: $error');
     } finally {
-      if (mounted) setState(() => _isRefreshing = false);
+      if (mounted) setState(() => _isEstimatingExit = false);
     }
+  }
+
+  /// Hidden on purpose (a long press on the VTXO ID): the VTXO's full encoding, to back it up or
+  /// import it into this wallet again from the VTXO overview's menu.
+  Future<void> _exportVtxo(ArkVtxo vtxo) async {
+    vibrateLight();
+    if (!await openArkWalletForSession(context, widget.id, userInitiated: true) || !mounted) return;
+    final String hex;
+    try {
+      hex = await context.read<ArkProvider>().vtxoEncoded(widget.id, vtxo.id);
+    } catch (error) {
+      if (mounted) await showArkError(context, t.ark.vtxo.export_failed, '$error');
+      return;
+    }
+    if (!mounted) return;
+    final colors = context.coconutColors;
+    CommonBottomSheets.showBottomSheet(
+      context: context,
+      title: t.ark.vtxo.export_title,
+      screenName: '${AppRouteNames.vtxoDetail}/export',
+      showCloseButton: true,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(16, 0, 16, 32),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Text(t.ark.vtxo.export_description, style: CoconutTypography.body3_12.setColor(colors.secondaryText)),
+            CoconutLayout.spacing_400h,
+            CopyTextContainer(
+              text: shortenMiddle(hex, head: 48, tail: 48),
+              copyText: hex,
+              textStyle: CoconutTypography.body2_14_Number.setColor(colors.primaryText),
+            ),
+            CoconutLayout.spacing_200h,
+            Text(
+              t.ark.vtxo.export_size(bytes: hex.length ~/ 2),
+              style: CoconutTypography.body3_12.setColor(colors.tertiaryText),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 
   @override
@@ -164,19 +225,29 @@ class _VtxoDetailScreenState extends State<VtxoDetailScreen> {
 
   Widget _buildRows(ArkVtxo vtxo, String? blocks, {required bool isInWallet}) {
     final valueStyle = CoconutTypography.body2_14_Number.setColor(context.coconutColors.primaryText);
-    // A VTXO that is still in the wallet and not held by an operation can be refreshed alone.
-    final canRefresh = isInWallet && !vtxo.isLocked && !_isRefreshing;
+    final exitCost = _exitCost;
+    final String exitCostText;
+    if (exitCost != null) {
+      exitCostText = t.ark.vtxo.exit_cost_value(
+        amount: formatSats(_unit, exitCost.feeSats),
+        rate: '${exitCost.feeRate}',
+      );
+    } else {
+      exitCostText = _isEstimatingExit ? t.ark.send.estimating : '-';
+    }
     return Column(
       children: [
         UnderlineButtonItemCard(
           label: t.ark.vtxo.vtxo_id,
-          child: CopyTextContainer(text: vtxo.id, textStyle: valueStyle),
+          // A long press exports the VTXO (hidden: it's for backups and support).
+          child: GestureDetector(
+            onLongPress: isInWallet ? () => _exportVtxo(vtxo) : null,
+            child: CopyTextContainer(text: vtxo.id, textStyle: valueStyle),
+          ),
         ),
         UnderlineButtonItemCard(label: t.ark.vtxo.state, child: _VtxoStateChip(isLocked: vtxo.isLocked)),
         UnderlineButtonItemCard(
           label: t.ark.vtxo.expiry,
-          underlineButtonLabel: canRefresh ? t.ark.vtxo.refresh_button : '',
-          onTapUnderlineButton: canRefresh ? () => _refresh(vtxo) : null,
           child: Text(
             blocks == null
                 ? t.ark.vtxo.at_block(height: vtxo.expiryHeight)
@@ -184,6 +255,7 @@ class _VtxoDetailScreenState extends State<VtxoDetailScreen> {
             style: valueStyle,
           ),
         ),
+        UnderlineButtonItemCard(label: t.ark.vtxo.exit_cost, child: Text(exitCostText, style: valueStyle)),
         UnderlineButtonItemCard(label: t.ark.vtxo.kind, child: Text(vtxo.kind, style: valueStyle)),
         UnderlineButtonItemCard(
           label: t.ark.vtxo.exit_depth,

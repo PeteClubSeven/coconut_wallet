@@ -290,6 +290,23 @@ class ArkProvider extends ChangeNotifier {
     );
   }
 
+  /// [vtxoId]'s full encoding in hex, to back it up or import it again.
+  Future<String> vtxoEncoded(int walletId, String vtxoId) =>
+      _arkWalletService.vtxoEncoded(_requireFingerprint(walletId), vtxoId);
+
+  /// Imports a VTXO from its encoding, then syncs so it shows. Only this wallet's own VTXOs (its
+  /// keys come from the seed) can be imported. Returns the ids bark now holds from it.
+  Future<List<String>> importVtxo(int walletId, String encoded) async {
+    final ids = await _arkWalletService.importVtxos(_requireFingerprint(walletId), [encoded.trim()]);
+    await syncNow(walletId, maintenance: false);
+    return ids;
+  }
+
+  /// The on-chain cost of exiting [vtxoId] on its own at [feeRateSatPerVb]: broadcasting its exit
+  /// transactions (already-confirmed ones cost nothing) and claiming the output.
+  Future<int> estimateExitFee(int walletId, String vtxoId, int feeRateSatPerVb) async =>
+      (await _arkWalletService.estimateExitFee(_requireFingerprint(walletId), [vtxoId], feeRateSatPerVb)).totalFeeSats;
+
   /// VTXOs bark wants refreshed now (close to expiry, or past the server's chain-depth limit).
   Future<List<String>> vtxoIdsToRefresh(int walletId) =>
       _arkWalletService.vtxoIdsToRefresh(_requireFingerprint(walletId));

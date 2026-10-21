@@ -168,6 +168,13 @@ class ArkMovement {
     return null;
   }
 
+  /// The signed on-chain transaction (hex) of an offboard or an on-chain payment from Ark, which
+  /// bark records once the server has signed it.
+  String? get offboardTxHex {
+    final hex = metadata['offboard_tx'];
+    return hex is String && hex.isNotEmpty ? hex : null;
+  }
+
   /// Movements that changed nothing are noise in a transaction list: failed or canceled ones, and
   /// Lightning sends the server refused to start (bark 0.7.1 leaves those pending forever, with
   /// nothing locked; a payment really in flight has its amount locked, so a non-zero balance).

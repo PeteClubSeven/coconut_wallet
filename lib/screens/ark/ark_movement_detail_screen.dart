@@ -1,4 +1,15 @@
 import 'package:coconut_design_system/coconut_design_system.dart' hide CoconutAppBar;
+import 'package:coconut_lib/coconut_lib.dart' show Transaction;
+import 'package:coconut_wallet/analytics/analytics_parameter_values.dart';
+import 'package:coconut_wallet/enums/network_enums.dart';
+import 'package:coconut_wallet/extensions/num_extensions.dart';
+import 'package:coconut_wallet/model/wallet/transaction_address.dart';
+import 'package:coconut_wallet/model/wallet/transaction_record.dart';
+import 'package:coconut_wallet/providers/node_provider/node_provider.dart';
+import 'package:coconut_wallet/providers/preferences/block_explorer_provider.dart';
+import 'package:coconut_wallet/providers/wallet_provider.dart';
+import 'package:coconut_wallet/utils/uri_launcher.dart';
+import 'package:coconut_wallet/widgets/features/transaction/card/transaction_input_output_card.dart';
 import 'package:coconut_wallet/app/router/app_route_names.dart';
 import 'package:coconut_wallet/app/router/route_args.dart';
 import 'package:coconut_wallet/design_system/context/coconut_theme_context_extension.dart';
@@ -54,6 +65,11 @@ class _ArkMovementDetailScreenState extends State<ArkMovementDetailScreen> {
   late final ArkProvider _arkProvider;
   late BitcoinUnit _unit;
 
+  /// The on-chain transaction of an offboard or an on-chain payment from Ark that isn't one of
+  /// this wallet's own (it paid a vault or someone else), looked up like any transaction.
+  TransactionRecord? _onchainTx;
+  ({String txid, bool pending})? _onchainTxRequest;
+
   // Syncs every few seconds while shown, so a payment that's still going (e.g. over Lightning)
   // settles on screen.
   @override
@@ -72,12 +88,52 @@ class _ArkMovementDetailScreenState extends State<ArkMovementDetailScreen> {
 
   void _toggleUnit() => setState(() => _unit = _unit.isBasedOnSatoshi ? BitcoinUnit.btc : BitcoinUnit.sats);
 
+  /// Looks up [movement]'s offboard transaction through Coconut's node, again whenever the
+  /// movement settles, so the inputs, fee and confirmations show as on the transaction detail
+  /// screen. Until the node has it, the transaction from bark's record shows its outputs.
+  void _loadOnchainTx(ArkMovement movement) {
+    final hex = movement.offboardTxHex;
+    final txid = movement.linkedTxid;
+    if (hex == null || txid == null) return;
+    final request = (txid: txid, pending: movement.isPending);
+    if (_onchainTxRequest == request) return;
+    _onchainTxRequest = request;
+    _onchainTx ??= _recordFromHex(hex, txid);
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      if (!mounted) return;
+      final wallet = context.read<WalletProvider>().getWalletById(widget.id);
+      final result = await context.read<NodeProvider>().getTransactionRecord(wallet, txid);
+      if (mounted && result.isSuccess) setState(() => _onchainTx = result.value);
+    });
+  }
+
+  /// The outputs of bark's copy of the transaction, for before the node knows it.
+  static TransactionRecord? _recordFromHex(String hex, String txid) {
+    try {
+      final tx = Transaction.parse(hex);
+      return TransactionRecord.fromTransactions(
+        transactionHash: txid,
+        timestamp: DateTime.now(),
+        blockHeight: 0,
+        transactionType: TransactionType.sent,
+        amount: 0,
+        fee: 0,
+        inputAddressList: const [],
+        outputAddressList: [for (final output in tx.outputs) TransactionAddress(output.getAddress(), output.amount)],
+        vSize: tx.getVirtualByte(),
+      );
+    } catch (_) {
+      return null;
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final colors = context.coconutColors;
     return Consumer<ArkProvider>(
       builder: (context, arkProvider, _) {
         final movement = arkProvider.snapshot(widget.id)?.movements.where((m) => m.id == widget.movementId).firstOrNull;
+        if (movement != null) _loadOnchainTx(movement);
         return Scaffold(
           backgroundColor: colors.background,
           appBar: CoconutAppBar.build(context: context, title: t.view_tx_details, backgroundColor: colors.background),
@@ -90,7 +146,13 @@ class _ArkMovementDetailScreenState extends State<ArkMovementDetailScreen> {
                         style: CoconutTypography.body3_12.setColor(colors.secondaryText),
                       ),
                     )
-                    : _MovementDetails(walletId: widget.id, movement: movement, unit: _unit, onToggleUnit: _toggleUnit),
+                    : _MovementDetails(
+                      walletId: widget.id,
+                      movement: movement,
+                      onchainTx: _onchainTx,
+                      unit: _unit,
+                      onToggleUnit: _toggleUnit,
+                    ),
           ),
         );
       },
@@ -102,12 +164,16 @@ class _MovementDetails extends StatelessWidget {
   const _MovementDetails({
     required this.walletId,
     required this.movement,
+    required this.onchainTx,
     required this.unit,
     required this.onToggleUnit,
   });
 
   final int walletId;
   final ArkMovement movement;
+
+  /// The offboard transaction, when it isn't one of the wallet's own (see the state).
+  final TransactionRecord? onchainTx;
   final BitcoinUnit unit;
   final VoidCallback onToggleUnit;
 
@@ -158,7 +224,9 @@ class _MovementDetails extends StatelessWidget {
             ),
           for (final (label, value) in copyable)
             UnderlineButtonItemCard(label: label, child: CopyTextContainer(text: value, textStyle: valueStyle)),
-          if (linkedTxid != null)
+          if (onchainTx != null && !hasLinkedTx)
+            ..._buildOnchainTx(context, onchainTx!)
+          else if (linkedTxid != null)
             UnderlineButtonItemCard(
               label: t.ark.movement.onchain_tx,
               underlineButtonLabel: hasLinkedTx ? t.ark.movement.view_transaction : null,
@@ -194,6 +262,70 @@ class _MovementDetails extends StatelessWidget {
         ],
       ),
     );
+  }
+
+  /// The offboard transaction as the transaction detail screen shows a transaction: its id with
+  /// the explorer link and the inputs and outputs, the fee rate and the block.
+  List<Widget> _buildOnchainTx(BuildContext context, TransactionRecord tx) {
+    final colors = context.coconutColors;
+    final valueStyle = CoconutTypography.body2_14_Number.setColor(colors.primaryText);
+    final explorer = context.read<BlockExplorerProvider>();
+    final destinations = movement.sentToDestinations.map((destination) => destination.value).toSet();
+    final tip = context.read<NodeProvider>().currentBlockNotifier.value?.height;
+    final confirmations = tx.blockHeight != 0 && tip != null ? tip - tx.blockHeight + 1 : null;
+    return [
+      UnderlineButtonItemCard(
+        label: t.tx_id,
+        underlineButtonLabel: t.view_mempool,
+        onTapUnderlineButton:
+            () => launchURL(
+              context,
+              explorer.explorerUrlFor(BlockExplorerPathType.tx, tx.transactionHash),
+              openInApp: true,
+              destination: ExternalLinkDestination.explorerTx,
+            ),
+        child: Column(
+          children: [
+            CopyTextContainer(text: tx.transactionHash, textStyle: valueStyle),
+            CoconutLayout.spacing_300h,
+            TransactionInputOutputCard(
+              transaction: tx,
+              isSameAddress: (address, _) => destinations.contains(address),
+              currentUnit: unit,
+            ),
+          ],
+        ),
+      ),
+      UnderlineButtonItemCard(
+        label: t.fee_rate,
+        child: Text(
+          tx.inputAddressList.isNotEmpty ? '${tx.feeRate.toLocaleString(maxDecimalPlaces: 2)} sats/vB' : '-',
+          style: valueStyle,
+        ),
+      ),
+      UnderlineButtonItemCard(
+        label: t.block_num,
+        underlineButtonLabel: tx.blockHeight != 0 ? t.view_mempool : '',
+        onTapUnderlineButton:
+            tx.blockHeight == 0
+                ? null
+                : () => launchURL(
+                  context,
+                  explorer.explorerUrlFor(BlockExplorerPathType.block, '${tx.blockHeight}'),
+                  openInApp: true,
+                  destination: ExternalLinkDestination.explorerBlock,
+                ),
+        child: Text(
+          tx.blockHeight != 0
+              ? t.transaction_detail_screen.confirmation(
+                height: '${tx.blockHeight}',
+                count: confirmations == null ? '' : '$confirmations ',
+              )
+              : '-',
+          style: valueStyle,
+        ),
+      ),
+    ];
   }
 
   /// The signed amount in the receiving or sending colour, as on the transaction detail screen.

@@ -255,6 +255,26 @@ class ArkWalletService {
   Future<bark.FeeEstimate> estimateSendOnchainFee(String fingerprint, String address, int amountSats) =>
       withWallet(fingerprint, (wallet) => wallet.estimateSendOnchainFee(address: address, amountSats: amountSats));
 
+  /// A VTXO's full encoding in hex (its whole chain back to the round), as bark exports it; it can
+  /// be imported again.
+  Future<String> vtxoEncoded(String fingerprint, String vtxoId) =>
+      withWallet(fingerprint, (wallet) => wallet.vtxoEncoded(vtxoId: vtxoId));
+
+  /// Imports VTXOs from their encoding (hex or base64). bark only takes this seed's own VTXOs.
+  /// Returns the ids of the VTXOs it now holds.
+  Future<List<String>> importVtxos(String fingerprint, List<String> encodedVtxos) =>
+      withWallet(fingerprint, (wallet) => wallet.importVtxos(encodedVtxos: encodedVtxos, args: null));
+
+  /// What exiting [vtxoIds] unilaterally would cost on-chain at [feeRateSatPerVb].
+  Future<bark.EmergencyExitFeeEstimate> estimateExitFee(
+    String fingerprint,
+    List<String> vtxoIds,
+    int feeRateSatPerVb,
+  ) => withWallet(
+    fingerprint,
+    (wallet) => wallet.estimateEmergencyExitFee(vtxoIds: vtxoIds, feeRateSatPerVb: feeRateSatPerVb, destination: null),
+  );
+
   Future<bool> validateArkoorAddress(String fingerprint, String address) =>
       withWallet(fingerprint, (wallet) => wallet.validateArkoorAddress(address: address));
 

@@ -16,6 +16,7 @@ import 'package:coconut_wallet/providers/price_provider.dart';
 import 'package:coconut_wallet/providers/wallet_provider.dart';
 import 'package:coconut_wallet/app/router/route_args.dart';
 import 'package:coconut_wallet/screens/ark/ark_unlock_flow.dart';
+import 'package:coconut_wallet/screens/ark/vtxo_import_sheet.dart';
 import 'package:coconut_wallet/screens/ark/vtxo_refresh_flow.dart';
 import 'package:coconut_wallet/screens/wallet_detail/utxo_overview/utxo_bucket_scroll_rail.dart';
 import 'package:coconut_wallet/screens/wallet_detail/utxo_overview/utxo_overview_filter_widgets.dart';
@@ -178,6 +179,8 @@ class _VtxoOverviewScreenState extends State<VtxoOverviewScreen> {
         if (snapshot != null) _showRecovery(snapshot);
       case 2:
         _startSelecting();
+      case 3:
+        showVtxoImportSheet(context, widget.id);
     }
   }
 
@@ -453,7 +456,12 @@ class _VtxoOverviewScreenState extends State<VtxoOverviewScreen> {
           children: [
             WalletRefreshIndicator(isRefreshing: isBusy),
             VtxoMenuButton(
-              items: [t.ark.vtxo.menu_balance, t.ark.vtxo.menu_recovery, t.ark.vtxo.menu_refresh],
+              items: [
+                t.ark.vtxo.menu_balance,
+                t.ark.vtxo.menu_recovery,
+                t.ark.vtxo.menu_refresh,
+                t.ark.vtxo.menu_import,
+              ],
               onSelected: (index) => _onMenuSelected(index, snapshot, tipHeight),
             ),
           ],
