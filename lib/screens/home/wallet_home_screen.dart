@@ -1630,7 +1630,7 @@ class _WalletHomeScreenState extends State<WalletHomeScreen> with TickerProvider
         ArkActivity(:final time) => time.toLocal(),
       };
       final List<String> transactionTimeStamp = DateTimeUtil.formatTimestamp(txDate);
-      final String formattedAmount = currentUnit.formatAmountWithSign(activity.amount, isPositive: isReceived);
+      final String formattedAmount = currentUnit.formatAmountWithSign(activity.displayAmount, isPositive: isReceived);
       final String iconSource = TransactionUtil.getStatusIconAsset(status);
       final datetimeTextColor = context.coconutColors.tertiaryText;
       final walletNameTextColor = context.coconutColors.secondaryText;

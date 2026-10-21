@@ -144,13 +144,12 @@ class WalletHomeViewModel extends ChangeNotifier {
     final walletIds = _walletProvider.walletItemList.map((wallet) => wallet.id).toSet();
     final since = DateTime.now().subtract(const Duration(days: kRecenctTransactionDays));
     final entries = [
-      for (final entry in _recentTransactions.entries)
-        if (walletIds.contains(entry.key))
-          for (final tx in entry.value) Tuple2<int, WalletActivity>(entry.key, OnchainActivity(tx)),
       for (final walletId in walletIds)
-        for (final movement in _arkProvider?.snapshot(walletId)?.movements ?? const <ArkMovement>[])
-          if (movement.isVisibleInHistory && (movement.isPending || movement.timestamp.isAfter(since)))
-            Tuple2<int, WalletActivity>(walletId, ArkActivity(movement)),
+        for (final activity in WalletActivity.merge(_recentTransactions[walletId] ?? const [], [
+          for (final movement in _arkProvider?.snapshot(walletId)?.movements ?? const <ArkMovement>[])
+            if (movement.isPending || movement.timestamp.isAfter(since)) movement,
+        ]))
+          Tuple2<int, WalletActivity>(walletId, activity),
     ];
     return entries..sort((a, b) => WalletActivity.compare(a.item2, b.item2));
   }

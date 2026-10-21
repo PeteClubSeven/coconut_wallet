@@ -17,6 +17,10 @@ sealed class WalletActivity {
   /// Signed change to the wallet's balance, fees included.
   int get amount;
 
+  /// The amount a row shows. Usually [amount]; for a move between on-chain and Ark (whose net
+  /// change is just the fees) it's the amount moved.
+  int get displayAmount => amount;
+
   /// When it happened (for pending entries, when they started).
   DateTime get time;
 
@@ -28,10 +32,22 @@ sealed class WalletActivity {
   int get contentHash;
 
   /// Merges both histories, pending entries first, then newest first, like the on-chain list.
+  ///
+  /// A move between on-chain and Ark (a board, an offboard, an on-chain payment from Ark) is one
+  /// entry: the Ark movement carries the on-chain transaction its [ArkMovement.linkedTxid] names,
+  /// and that transaction isn't listed separately.
   static List<WalletActivity> merge(List<TransactionRecord> transactions, List<ArkMovement> movements) {
+    final transactionsById = {for (final tx in transactions) tx.transactionHash: tx};
+    final linkedIds = <String>{};
+    final arkActivities = <WalletActivity>[];
+    for (final movement in movements.where((movement) => movement.isVisibleInHistory)) {
+      final linkedTx = transactionsById[movement.linkedTxid];
+      if (linkedTx != null) linkedIds.add(linkedTx.transactionHash);
+      arkActivities.add(ArkActivity(movement, linkedTx: linkedTx));
+    }
     return [
-      ...transactions.map(OnchainActivity.new),
-      ...movements.where((movement) => movement.isVisibleInHistory).map(ArkActivity.new),
+      ...transactions.where((tx) => !linkedIds.contains(tx.transactionHash)).map(OnchainActivity.new),
+      ...arkActivities,
     ]..sort(compare);
   }
 
@@ -76,24 +92,39 @@ class OnchainActivity extends WalletActivity {
 }
 
 class ArkActivity extends WalletActivity {
-  const ArkActivity(this.movement);
+  const ArkActivity(this.movement, {this.linkedTx});
 
   final ArkMovement movement;
+
+  /// This wallet's on-chain side of a move between on-chain and Ark, when it has one.
+  final TransactionRecord? linkedTx;
+
+  bool get isMove => linkedTx != null;
 
   @override
   String get key => 'ark:${movement.id}';
 
+  /// For a move, both sides together: what changed overall is the fees.
   @override
-  int get amount => movement.effectiveBalanceSats;
+  int get amount => movement.effectiveBalanceSats + (linkedTx?.amount ?? 0);
+
+  /// For a move, what arrived on the other side: in Ark for a board, on-chain for an offboard.
+  @override
+  int get displayAmount {
+    final tx = linkedTx;
+    if (tx == null) return movement.effectiveBalanceSats;
+    return movement.kind == ArkMovementKind.board ? movement.effectiveBalanceSats : tx.amount;
+  }
 
   @override
   DateTime get time => movement.timestamp;
 
   @override
-  bool get isPending => movement.isPending;
+  bool get isPending => movement.isPending || (linkedTx != null && linkedTx!.blockHeight == 0);
 
   @override
   TransactionStatus get status {
+    if (isMove) return isPending ? TransactionStatus.selfsending : TransactionStatus.self;
     if (amount > 0) return isPending ? TransactionStatus.receiving : TransactionStatus.received;
     if (amount < 0 && movement.kind != ArkMovementKind.refresh) {
       return isPending ? TransactionStatus.sending : TransactionStatus.sent;
@@ -115,7 +146,8 @@ class ArkActivity extends WalletActivity {
   String? get statusLabel => switch (movement.kind) {
     ArkMovementKind.refresh => 'Refresh',
     ArkMovementKind.board => 'Moved to Ark',
-    ArkMovementKind.offboard => 'Moved on-chain',
+    // Without this wallet's transaction, the funds went elsewhere (e.g. to a vault).
+    ArkMovementKind.offboard || ArkMovementKind.sendOnchain => isMove ? 'Moved on-chain' : 'Sent on-chain',
     ArkMovementKind.exit => 'Exit',
     _ =>
       movement.status == ArkMovementStatus.failed
@@ -131,5 +163,6 @@ class ArkActivity extends WalletActivity {
     movement.status,
     movement.effectiveBalanceSats,
     movement.updatedAt.microsecondsSinceEpoch,
+    linkedTx?.contentHashCode,
   );
 }

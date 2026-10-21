@@ -115,7 +115,7 @@ class TransactionItemCard extends StatelessWidget {
   }
 
   Widget _buildAmount(BuildContext context) {
-    final String amountString = currentUnit.displayBitcoinAmount(activity.amount);
+    final String amountString = currentUnit.displayBitcoinAmount(activity.displayAmount);
     final bool isReceived = status == TransactionStatus.received || status == TransactionStatus.receiving;
     final String prefix = isReceived ? '+' : '';
 

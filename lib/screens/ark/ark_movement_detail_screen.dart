@@ -7,6 +7,7 @@ import 'package:coconut_wallet/model/ark/ark_movement.dart';
 import 'package:coconut_wallet/model/wallet/wallet_activity.dart';
 import 'package:coconut_wallet/providers/ark_provider.dart';
 import 'package:coconut_wallet/providers/preferences/preference_provider.dart';
+import 'package:coconut_wallet/providers/transaction_provider.dart';
 import 'package:coconut_wallet/ui/coconut/coconut_app_bar.dart';
 import 'package:coconut_wallet/widgets/common/buttons/copy_text_container.dart';
 import 'package:flutter/material.dart';
@@ -55,7 +56,7 @@ class ArkMovementDetailScreen extends StatelessWidget {
             child:
                 movement == null
                     ? Center(child: _Muted('This movement is no longer in the Ark history.'))
-                    : _MovementDetails(movement: movement, unit: unit),
+                    : _MovementDetails(walletId: id, movement: movement, unit: unit),
           ),
         );
       },
@@ -64,8 +65,9 @@ class ArkMovementDetailScreen extends StatelessWidget {
 }
 
 class _MovementDetails extends StatelessWidget {
-  const _MovementDetails({required this.movement, required this.unit});
+  const _MovementDetails({required this.walletId, required this.movement, required this.unit});
 
+  final int walletId;
   final ArkMovement movement;
   final BitcoinUnit unit;
 
@@ -105,7 +107,26 @@ class _MovementDetails extends StatelessWidget {
           _Copyable('Received on (${destination.type})', destination.value),
         if (movement.lightningInvoice != null) _Copyable('Lightning invoice', movement.lightningInvoice!),
         if (movement.paymentHash != null) _Copyable('Payment hash', movement.paymentHash!),
-        if (movement.linkedTxid != null) _Copyable('On-chain transaction', movement.linkedTxid!),
+        if (movement.linkedTxid != null) ...[
+          _Copyable('On-chain transaction', movement.linkedTxid!),
+          // A move's on-chain side, when it's in this wallet's history.
+          if (context.read<TransactionProvider>().getTransactionRecord(walletId, movement.linkedTxid!) != null)
+            Padding(
+              padding: const EdgeInsets.only(top: 8),
+              child: CoconutButton(
+                text: 'View on-chain transaction',
+                onPressed:
+                    () => Navigator.pushNamed(
+                      context,
+                      AppRouteNames.transactionDetail,
+                      arguments: TransactionDetailRouteArgs(id: walletId, txHash: movement.linkedTxid!),
+                    ),
+                height: 44,
+                backgroundColor: context.coconutColors.surfaceButton,
+                foregroundColor: context.coconutColors.surfaceButtonText,
+              ),
+            ),
+        ],
         if (movement.inputVtxoIds.isNotEmpty) _Copyable('VTXOs spent', movement.inputVtxoIds.join('\n')),
         if (movement.outputVtxoIds.isNotEmpty) _Copyable('VTXOs created', movement.outputVtxoIds.join('\n')),
         if (movement.exitedVtxoIds.isNotEmpty) _Copyable('VTXOs exited', movement.exitedVtxoIds.join('\n')),
