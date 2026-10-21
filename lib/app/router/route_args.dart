@@ -50,16 +50,24 @@ class SendRecipientRouteArgs {
   });
 }
 
+/// A recipient chosen on Send's first page: the destination as entered, and its amount (null for
+/// the last one with Max).
+class SendRecipientArg {
+  final String input;
+  final int? amountSats;
+  const SendRecipientArg(this.input, this.amountSats);
+}
+
 class SendOptionsRouteArgs {
   final int id;
-  final String input;
+  final List<SendRecipientArg> recipients;
+  final bool maxLast;
   final SendEntryPoint sendEntryPoint;
-  final int? initialAmountSats;
   const SendOptionsRouteArgs({
     required this.id,
-    required this.input,
+    required this.recipients,
     required this.sendEntryPoint,
-    this.initialAmountSats,
+    this.maxLast = false,
   });
 }
 

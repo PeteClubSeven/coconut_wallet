@@ -161,9 +161,9 @@ Map<String, WidgetBuilder> buildAppRoutes() {
           context,
           (args) => SendOptionsScreen(
             id: args.id,
-            input: args.input,
+            recipients: args.recipients,
+            maxLast: args.maxLast,
             sendEntryPoint: args.sendEntryPoint,
-            initialAmountSats: args.initialAmountSats,
           ),
         ),
     AppRouteNames.arkWallet:

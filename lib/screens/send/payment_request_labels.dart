@@ -29,10 +29,6 @@ String describePaymentRequest(PaymentRequest request, BitcoinUnit unit) {
   }
 }
 
-/// Whether Send can go on to the ways to pay it.
-bool isPayable(PaymentRequest request) =>
-    request.kind != PaymentRequestKind.unsupported && request.kind != PaymentRequestKind.unknown;
-
 String shortenDestination(String value) =>
     value.length <= 32 ? value : '${value.substring(0, 16)}…${value.substring(value.length - 10)}';
 

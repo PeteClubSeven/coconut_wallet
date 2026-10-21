@@ -3,7 +3,6 @@ import 'package:coconut_lib/coconut_lib.dart';
 import 'package:coconut_wallet/analytics/analytics_screen_names.dart';
 import 'package:coconut_wallet/app/router/app_route_names.dart';
 import 'package:coconut_wallet/app/router/route_args.dart';
-import 'package:coconut_wallet/config/number_format_config.dart';
 import 'package:coconut_wallet/design_system/context/coconut_theme_context_extension.dart';
 import 'package:coconut_wallet/enums/fiat_enums.dart';
 import 'package:coconut_wallet/localization/strings.g.dart';
@@ -22,8 +21,6 @@ import 'package:coconut_wallet/screens/send/utxo_selection_screen.dart';
 import 'package:coconut_wallet/services/ark/ark_wallet_service.dart';
 import 'package:coconut_wallet/ui/coconut/coconut_app_bar.dart';
 import 'package:coconut_wallet/ui/coconut/coconut_overlays.dart';
-import 'package:coconut_wallet/utils/address_scan_util.dart';
-import 'package:coconut_wallet/utils/balance_format_util.dart';
 import 'package:coconut_wallet/utils/fee_rate_mixin.dart';
 import 'package:coconut_wallet/utils/logger.dart';
 import 'package:coconut_wallet/utils/payment_request_parser.dart';
@@ -31,28 +28,28 @@ import 'package:coconut_wallet/widgets/common/dialogs/dialog.dart';
 import 'package:coconut_wallet/widgets/common/overlays/common_bottom_sheets.dart';
 import 'package:coconut_wallet/widgets/features/utxo/bottom_sheet/estimated_fee_bottom_sheet.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 
-/// Step 2 of Send for a hot wallet with Ark: how much, and how to pay it. Lists every way the
-/// recipient can be paid with its fee: from Ark (Ark, Lightning, on-chain via Ark) or on-chain
-/// from the wallet's UTXOs, where the UTXOs, fee rate and extra recipients are chosen here before
-/// the confirm screen. Strings are not localized yet (proof of concept).
+/// Step 2 of Send for a hot wallet with Ark: how to pay the recipients chosen on step 1. One
+/// recipient can be paid every way its request allows, each card with its fee: from Ark (Ark,
+/// Lightning, on-chain via Ark) or on-chain from the wallet's UTXOs. Several recipients, or Max,
+/// go on-chain in one transaction. The on-chain card picks UTXOs and the fee rate before the
+/// confirm screen. Strings are not localized yet (proof of concept).
 class SendOptionsScreen extends StatefulWidget {
   const SendOptionsScreen({
     super.key,
     required this.id,
-    required this.input,
+    required this.recipients,
     required this.sendEntryPoint,
-    this.initialAmountSats,
+    this.maxLast = false,
   });
 
   final int id;
+  final List<SendRecipientArg> recipients;
 
-  /// The payment request, as entered on the recipient step.
-  final String input;
+  /// The last recipient gets everything left on-chain.
+  final bool maxLast;
   final SendEntryPoint sendEntryPoint;
-  final int? initialAmountSats;
 
   @override
   State<SendOptionsScreen> createState() => _SendOptionsScreenState();
@@ -62,9 +59,7 @@ class _SendOptionsScreenState extends State<SendOptionsScreen> {
   late final SendOptionsViewModel _vm;
   late final ArkProvider _arkProvider;
   late final String _walletName;
-  final TextEditingController _amountController = TextEditingController();
-  final FocusNode _amountFocusNode = FocusNode();
-  late BitcoinUnit _unit;
+  late final BitcoinUnit _unit;
   bool _isPaying = false;
 
   @override
@@ -75,24 +70,24 @@ class _SendOptionsScreenState extends State<SendOptionsScreen> {
     _walletName = walletProvider.getWalletById(widget.id).name;
     _unit = context.read<PreferenceProvider>().currentUnit;
     _vm = SendOptionsViewModel(
-      request: PaymentRequest.parse(widget.input, NetworkType.currentNetworkType),
+      recipients: [
+        for (final recipient in widget.recipients)
+          SendRecipientInput(
+            PaymentRequest.parse(recipient.input, NetworkType.currentNetworkType),
+            recipient.amountSats,
+          ),
+      ],
+      maxLast: widget.maxLast,
       wallet: walletProvider.getWalletById(widget.id),
       utxos: walletProvider.getUtxoList(widget.id),
       changeDerivationPath: walletProvider.getChangeAddress(widget.id).derivationPath,
       ark: ArkProviderSendAccess(_arkProvider, widget.id),
       sendInfoProvider: context.read<SendInfoProvider>(),
     );
-    final initialAmount = widget.initialAmountSats;
-    if (_vm.fixedAmountSats == null && initialAmount != null && initialAmount > 0) {
-      _amountController.text = _amountText(initialAmount, _unit);
-      _vm.setEnteredAmount(initialAmount);
-    }
-    _amountController.addListener(_onAmountTextChanged);
     _arkProvider.addListener(_vm.onArkChanged);
     _vm.refreshRecommendedFees();
     WidgetsBinding.instance.addPostFrameCallback((_) async {
       if (!mounted) return;
-      if (_vm.fixedAmountSats == null && _amountController.text.isEmpty) _amountFocusNode.requestFocus();
       // Ark and Lightning requests need the Ark wallet; for a plain address, only ask when the
       // session would anyway (the on-chain option works without it).
       if (_vm.showsArkBalance && !_arkProvider.isOpen(widget.id)) {
@@ -106,45 +101,12 @@ class _SendOptionsScreenState extends State<SendOptionsScreen> {
   void dispose() {
     _arkProvider.removeListener(_vm.onArkChanged);
     _vm.dispose();
-    _amountController.dispose();
-    _amountFocusNode.dispose();
     super.dispose();
-  }
-
-  // --- Amount ---
-
-  static String _amountText(int sats, BitcoinUnit unit) {
-    if (unit.isBasedOnSatoshi) return '$sats';
-    return UnitUtil.convertSatoshiToBitcoinString(sats).replaceAll('.', NumberFormatConfig.instance.decimalSeparator);
-  }
-
-  int? _parseAmount(String text) {
-    final normalized = normalizeNumTextForNumParsing(text.trim());
-    if (normalized.isEmpty) return null;
-    final value = double.tryParse(normalized);
-    if (value == null || value <= 0) return null;
-    final decimals = normalized.contains('.') ? normalized.split('.').last.length : 0;
-    if (_unit.isBasedOnSatoshi ? decimals > 0 : decimals > 8) return null;
-    return _unit.toSatoshi(value);
-  }
-
-  void _onAmountTextChanged() => _vm.setEnteredAmount(_parseAmount(_amountController.text));
-
-  void _toggleUnit() {
-    final sats = _parseAmount(_amountController.text);
-    setState(() => _unit = _unit.isBasedOnSatoshi ? BitcoinUnit.btc : BitcoinUnit.sats);
-    _amountController.text = sats == null ? '' : _amountText(sats, _unit);
-  }
-
-  void _toggleMax() {
-    FocusScope.of(context).unfocus();
-    _vm.setMaxMode(!_vm.isMaxMode);
   }
 
   // --- On-chain choices ---
 
   Future<void> _pickUtxos() async {
-    FocusScope.of(context).unfocus();
     final result = await CommonBottomSheets.showDraggableBottomSheet<List<UtxoState>>(
       context: context,
       screenName: AnalyticsScreenNames.sendSelectUtxoSheet,
@@ -165,7 +127,6 @@ class _SendOptionsScreenState extends State<SendOptionsScreen> {
   }
 
   void _editFeeRate() {
-    FocusScope.of(context).unfocus();
     EstimatedFeeBottomSheet.show(
       context: context,
       listenable: _vm,
@@ -192,17 +153,6 @@ class _SendOptionsScreenState extends State<SendOptionsScreen> {
     );
   }
 
-  Future<void> _addRecipient() async {
-    FocusScope.of(context).unfocus();
-    await showModalBottomSheet<void>(
-      context: context,
-      isScrollControlled: true,
-      backgroundColor: context.coconutColors.surfaceBottomSheet,
-      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(24))),
-      builder: (_) => _AddRecipientSheet(viewModel: _vm, unit: _unit),
-    );
-  }
-
   Future<void> _unlock() async {
     await openArkWalletForSession(context, widget.id, userInitiated: true);
     _vm.onArkChanged();
@@ -211,7 +161,6 @@ class _SendOptionsScreenState extends State<SendOptionsScreen> {
   // --- Going ahead ---
 
   void _nextOnchain() {
-    FocusScope.of(context).unfocus();
     _vm.saveOnchainForConfirm(widget.sendEntryPoint);
     Navigator.pushNamed(context, AppRouteNames.sendConfirm, arguments: SendConfirmRouteArgs(currentUnit: _unit));
   }
@@ -222,7 +171,6 @@ class _SendOptionsScreenState extends State<SendOptionsScreen> {
           : route.isFirst;
 
   Future<void> _payFromArk() async {
-    FocusScope.of(context).unfocus();
     final option = _vm.selected!;
     final amount = _vm.amountSats!;
     final fee = _vm.statusOf(option).feeSats ?? 0;
@@ -299,6 +247,14 @@ class _SendOptionsScreenState extends State<SendOptionsScreen> {
         final selected = _vm.selected;
         final isOnchain = selected?.kind == SendOptionKind.onchain;
         final canGo = _vm.canProceed && !_isPaying;
+        final String? onchainOnlyNote;
+        if (_vm.isBatch) {
+          onchainOnlyNote = 'Several recipients go out in one on-chain transaction.';
+        } else if (_vm.isMaxMode) {
+          onchainOnlyNote = 'Max sends everything on-chain.';
+        } else {
+          onchainOnlyNote = null;
+        }
         return Scaffold(
           backgroundColor: colors.background,
           appBar: CoconutAppBar.build(
@@ -310,29 +266,24 @@ class _SendOptionsScreenState extends State<SendOptionsScreen> {
             child: ListView(
               padding: const EdgeInsets.fromLTRB(16, 8, 16, 120),
               children: [
-                _buildRecipientHeader(),
-                CoconutLayout.spacing_400h,
-                _buildAmount(),
+                _buildRecipients(),
                 CoconutLayout.spacing_500h,
                 _label('Pay with'),
+                if (onchainOnlyNote != null) ...[_muted(onchainOnlyNote), CoconutLayout.spacing_200h],
                 for (final option in _vm.options) ...[_buildOption(option), CoconutLayout.spacing_200h],
               ],
             ),
           ),
-          bottomNavigationBar: Padding(
-            // Rides above the keyboard, which a bottom bar otherwise sits behind.
-            padding: EdgeInsets.only(bottom: MediaQuery.viewInsetsOf(context).bottom),
-            child: SafeArea(
-              child: Padding(
-                padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
-                child: CoconutButton(
-                  text: _isPaying ? 'Paying…' : (isOnchain ? t.next : 'Pay'),
-                  isActive: canGo,
-                  onPressed: canGo ? (isOnchain ? _nextOnchain : _payFromArk) : () {},
-                  height: 52,
-                  backgroundColor: colors.primary,
-                  foregroundColor: colors.background,
-                ),
+          bottomNavigationBar: SafeArea(
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
+              child: CoconutButton(
+                text: _isPaying ? 'Paying…' : (isOnchain ? t.next : 'Pay'),
+                isActive: canGo,
+                onPressed: canGo ? (isOnchain ? _nextOnchain : _payFromArk) : () {},
+                height: 52,
+                backgroundColor: colors.primary,
+                foregroundColor: colors.background,
               ),
             ),
           ),
@@ -341,11 +292,10 @@ class _SendOptionsScreenState extends State<SendOptionsScreen> {
     );
   }
 
-  Widget _buildRecipientHeader() {
+  /// Who gets what; tapping goes back to step 1 to change it.
+  Widget _buildRecipients() {
     final colors = context.coconutColors;
-    final request = _vm.request;
-    final destination =
-        request.bitcoinAddress ?? request.arkAddress ?? request.lightningInvoice ?? request.lightningAddress;
+    final recipients = _vm.recipients;
     return Material(
       color: colors.surface,
       borderRadius: BorderRadius.circular(CoconutStyles.radius_300),
@@ -353,25 +303,26 @@ class _SendOptionsScreenState extends State<SendOptionsScreen> {
         borderRadius: BorderRadius.circular(CoconutStyles.radius_300),
         onTap: () => Navigator.pop(context),
         child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+          padding: const EdgeInsets.fromLTRB(16, 12, 12, 12),
           child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Expanded(
                 child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
                     Text(
-                      describePaymentRequest(request, _unit),
+                      recipients.length == 1
+                          ? describePaymentRequest(_vm.request, _unit)
+                          : '${recipients.length} recipients',
                       style: CoconutTypography.body3_12.setColor(colors.secondaryText),
                     ),
-                    if (destination != null)
-                      Text(
-                        shortenDestination(destination),
-                        style: CoconutTypography.body2_14_Number.setColor(colors.primaryText),
-                      ),
+                    CoconutLayout.spacing_100h,
+                    for (var i = 0; i < recipients.length; i++) _recipientLine(i),
                   ],
                 ),
               ),
+              CoconutLayout.spacing_200w,
               Icon(Icons.edit_outlined, size: 18, color: colors.iconPrimary),
             ],
           ),
@@ -380,54 +331,27 @@ class _SendOptionsScreenState extends State<SendOptionsScreen> {
     );
   }
 
-  Widget _buildAmount() {
+  Widget _recipientLine(int index) {
     final colors = context.coconutColors;
-    final fixed = _vm.fixedAmountSats;
-    final Widget amount;
-    if (fixed != null || _vm.isMaxMode) {
-      final value = fixed ?? _vm.amountSats;
-      amount = Text(
-        value == null ? '…' : _display(value),
-        style: CoconutTypography.heading4_18_NumberBold.setColor(colors.primaryText),
-      );
-    } else {
-      amount = TextField(
-        controller: _amountController,
-        focusNode: _amountFocusNode,
-        keyboardType: TextInputType.numberWithOptions(decimal: !_unit.isBasedOnSatoshi),
-        inputFormatters: [FilteringTextInputFormatter.allow(RegExp(_unit.isBasedOnSatoshi ? r'[0-9]' : r'[0-9.,]'))],
-        style: CoconutTypography.heading4_18_NumberBold.setColor(colors.primaryText),
-        decoration: InputDecoration(
-          isDense: true,
-          border: InputBorder.none,
-          hintText: '0',
-          hintStyle: CoconutTypography.heading4_18_NumberBold.setColor(colors.tertiaryText),
-        ),
-      );
-    }
-    return Container(
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(color: colors.surface, borderRadius: BorderRadius.circular(CoconutStyles.radius_300)),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
+    final request = _vm.recipients[index].request;
+    final destination =
+        request.bitcoinAddress ?? request.arkAddress ?? request.lightningInvoice ?? request.lightningAddress ?? '';
+    final amount = _vm.amountOf(index);
+    final isMax = _vm.isMaxMode && index == _vm.recipients.length - 1;
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 2),
+      child: Row(
         children: [
-          Row(
-            children: [
-              Expanded(child: amount),
-              if (fixed == null && !_vm.isMaxMode) _chip(_unit.symbol, selected: false, onTap: _toggleUnit),
-              if (_vm.canUseMax) ...[
-                CoconutLayout.spacing_200w,
-                _chip('Max', selected: _vm.isMaxMode, onTap: _toggleMax),
-              ],
-            ],
+          Expanded(
+            child: Text(
+              shortenDestination(destination),
+              style: CoconutTypography.body2_14_Number.setColor(colors.primaryText),
+            ),
           ),
-          if (fixed != null) ...[
-            CoconutLayout.spacing_100h,
-            _muted(_vm.request.kind == PaymentRequestKind.lightningInvoice ? 'Set by the invoice' : 'Set by the code'),
-          ],
-          CoconutLayout.spacing_300h,
-          if (_vm.showsOnchainBalance) _row('Available on-chain', _display(_vm.onchainAvailableSats)),
-          if (_vm.showsArkBalance) _row('Available in Ark', _display(_vm.arkSpendableSats)),
+          Text(
+            amount == null ? (isMax ? 'Everything left' : '—') : _display(amount),
+            style: CoconutTypography.body2_14_NumberBold.setColor(colors.primaryText),
+          ),
         ],
       ),
     );
@@ -437,7 +361,8 @@ class _SendOptionsScreenState extends State<SendOptionsScreen> {
     final colors = context.coconutColors;
     final status = _vm.statusOf(option);
     final isSelected = _vm.selected == option;
-    final amount = _vm.amountSats;
+    final total = option.kind == SendOptionKind.onchain ? _vm.totalSats : _vm.amountSats;
+    final available = option.kind == SendOptionKind.onchain ? _vm.onchainAvailableSats : _vm.arkSpendableSats;
     final String feeText;
     if (status.isEstimating) {
       feeText = 'Estimating…';
@@ -473,7 +398,7 @@ class _SendOptionsScreenState extends State<SendOptionsScreen> {
                           sendOptionTitle(option.kind),
                           style: CoconutTypography.body2_14_Bold.setColor(colors.primaryText),
                         ),
-                        _muted(sendOptionSource(option.kind)),
+                        _muted('${sendOptionSource(option.kind)} · ${_display(available)}'),
                       ],
                     ),
                   ),
@@ -487,22 +412,20 @@ class _SendOptionsScreenState extends State<SendOptionsScreen> {
                     Expanded(
                       child: Text(
                         status.problem!,
-                        style: CoconutTypography.body3_12.setColor(
-                          isSelected && amount != null ? colors.danger : colors.secondaryText,
-                        ),
+                        style: CoconutTypography.body3_12.setColor(isSelected ? colors.danger : colors.secondaryText),
                       ),
                     ),
                     if (status.canUnlock) TextButton(onPressed: _unlock, child: const Text('Unlock')),
                   ],
                 ),
-              ] else if (isSelected && status.feeSats != null && amount != null) ...[
+              ] else if (isSelected && status.feeSats != null && total != null) ...[
                 CoconutLayout.spacing_200h,
                 _row(
                   option.kind == SendOptionKind.onchain ? 'Total from the wallet' : 'Total from Ark',
-                  _display(amount + _extraTotal(option) + status.feeSats!),
+                  _display(total + status.feeSats!),
                 ),
               ],
-              if (isSelected && option.kind == SendOptionKind.onchain) _buildOnchainDetails(option),
+              if (isSelected && option.kind == SendOptionKind.onchain) _buildOnchainDetails(),
             ],
           ),
         ),
@@ -510,12 +433,7 @@ class _SendOptionsScreenState extends State<SendOptionsScreen> {
     );
   }
 
-  int _extraTotal(SendOption option) =>
-      option.kind == SendOptionKind.onchain
-          ? _vm.extraRecipients.fold(0, (total, recipient) => total + recipient.amountSats)
-          : 0;
-
-  Widget _buildOnchainDetails(SendOption option) {
+  Widget _buildOnchainDetails() {
     final colors = context.coconutColors;
     final feeRate = _vm.feeRate;
     final String feeRateText;
@@ -525,7 +443,6 @@ class _SendOptionsScreenState extends State<SendOptionsScreen> {
       feeRateText = _vm.recommendedFeeFetchStatus == RecommendedFeeFetchStatus.fetching ? 'Loading…' : 'Set';
     }
     final dust = _vm.unintendedDustFee;
-    final amount = _vm.amountSats;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
@@ -541,49 +458,7 @@ class _SendOptionsScreenState extends State<SendOptionsScreen> {
         ),
         _tapRow('Fee rate', feeRateText, _editFeeRate),
         if (dust != null && dust > 0) _muted('Includes ${_display(dust)} of change too small to keep'),
-        CoconutLayout.spacing_200h,
-        _label('Recipients'),
-        _recipientRow(option.destination, amount),
-        for (final (index, recipient) in _vm.extraRecipients.indexed)
-          _recipientRow(recipient.address, recipient.amountSats, onRemove: () => _vm.removeRecipient(index)),
-        Align(
-          alignment: Alignment.centerLeft,
-          child: TextButton.icon(
-            onPressed: _addRecipient,
-            icon: Icon(Icons.add, size: 18, color: colors.iconPrimary),
-            label: Text('Add recipient', style: CoconutTypography.body3_12.setColor(colors.primaryText)),
-          ),
-        ),
       ],
-    );
-  }
-
-  Widget _recipientRow(String address, int? amountSats, {VoidCallback? onRemove}) {
-    final colors = context.coconutColors;
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 2),
-      child: Row(
-        children: [
-          Expanded(
-            child: Text(
-              shortenDestination(address),
-              style: CoconutTypography.body3_12_Number.setColor(colors.secondaryText),
-            ),
-          ),
-          Text(
-            amountSats == null ? '—' : _display(amountSats),
-            style: CoconutTypography.body3_12_Number.setColor(colors.primaryText),
-          ),
-          if (onRemove != null)
-            IconButton(
-              visualDensity: VisualDensity.compact,
-              onPressed: onRemove,
-              icon: Icon(Icons.close, size: 16, color: colors.iconPrimary),
-            )
-          else
-            const SizedBox(width: 40),
-        ],
-      ),
     );
   }
 
@@ -621,165 +496,4 @@ class _SendOptionsScreenState extends State<SendOptionsScreen> {
       ],
     ),
   );
-
-  Widget _chip(String text, {required bool selected, required VoidCallback onTap}) => GestureDetector(
-    onTap: onTap,
-    child: Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-      decoration: BoxDecoration(
-        color: selected ? context.coconutColors.surfaceMuted : Colors.transparent,
-        border: Border.all(color: context.coconutColors.surfaceMuted),
-        borderRadius: BorderRadius.circular(CoconutStyles.radius_100),
-      ),
-      child: Text(text, style: CoconutTypography.body3_12.setColor(context.coconutColors.primaryText)),
-    ),
-  );
-}
-
-/// Adds another on-chain recipient: a Bitcoin address (typed, pasted or scanned; a BIP21 code
-/// brings its amount) and an amount.
-class _AddRecipientSheet extends StatefulWidget {
-  const _AddRecipientSheet({required this.viewModel, required this.unit});
-
-  final SendOptionsViewModel viewModel;
-  final BitcoinUnit unit;
-
-  @override
-  State<_AddRecipientSheet> createState() => _AddRecipientSheetState();
-}
-
-class _AddRecipientSheetState extends State<_AddRecipientSheet> {
-  final TextEditingController _addressController = TextEditingController();
-  final TextEditingController _amountController = TextEditingController();
-  String? _error;
-
-  BitcoinUnit get _unit => widget.unit;
-
-  @override
-  void dispose() {
-    _addressController.dispose();
-    _amountController.dispose();
-    super.dispose();
-  }
-
-  void _setAddress(String text) {
-    _addressController.text = text.trim();
-    final request = PaymentRequest.parse(text, NetworkType.currentNetworkType);
-    final amount = request.amountSats;
-    if (amount != null && _amountController.text.isEmpty) {
-      _amountController.text = _SendOptionsScreenState._amountText(amount, _unit);
-    }
-  }
-
-  Future<void> _paste() async {
-    final text = (await Clipboard.getData(Clipboard.kTextPlain))?.text;
-    if (text != null && text.trim().isNotEmpty && mounted) setState(() => _setAddress(text));
-  }
-
-  Future<void> _scan() async {
-    final scanned = await showAddressScannerBottomSheet(context, title: 'Add recipient');
-    if (scanned != null && mounted) setState(() => _setAddress(scanned));
-  }
-
-  void _add() {
-    final normalized = normalizeNumTextForNumParsing(_amountController.text.trim());
-    final value = double.tryParse(normalized);
-    if (value == null || value <= 0) {
-      setState(() => _error = 'Enter an amount');
-      return;
-    }
-    final error = widget.viewModel.addRecipient(_addressController.text, _unit.toSatoshi(value));
-    if (error != null) {
-      setState(() => _error = error);
-      return;
-    }
-    Navigator.pop(context);
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final colors = context.coconutColors;
-    return Padding(
-      padding: EdgeInsets.fromLTRB(20, 20, 20, MediaQuery.of(context).viewInsets.bottom + 20),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Text('Add recipient', style: CoconutTypography.body1_16_Bold.setColor(colors.primaryText)),
-          CoconutLayout.spacing_100h,
-          Text(
-            'Another on-chain payment in the same transaction.',
-            style: CoconutTypography.body3_12.setColor(colors.secondaryText),
-          ),
-          CoconutLayout.spacing_400h,
-          Container(
-            padding: const EdgeInsets.only(left: 16, right: 4),
-            decoration: BoxDecoration(
-              color: colors.surface,
-              borderRadius: BorderRadius.circular(CoconutStyles.radius_300),
-            ),
-            child: Row(
-              children: [
-                Expanded(
-                  child: TextField(
-                    controller: _addressController,
-                    autofocus: true,
-                    autocorrect: false,
-                    enableSuggestions: false,
-                    keyboardType: TextInputType.visiblePassword,
-                    maxLines: 2,
-                    minLines: 1,
-                    onChanged: (_) => setState(() => _error = null),
-                    style: CoconutTypography.body2_14.setColor(colors.primaryText),
-                    decoration: InputDecoration(
-                      border: InputBorder.none,
-                      hintText: 'Bitcoin address',
-                      hintStyle: CoconutTypography.body2_14.setColor(colors.tertiaryText),
-                    ),
-                  ),
-                ),
-                IconButton(onPressed: _paste, icon: Icon(Icons.content_paste, color: colors.iconPrimary, size: 20)),
-                IconButton(onPressed: _scan, icon: Icon(Icons.qr_code_scanner, color: colors.iconPrimary, size: 20)),
-              ],
-            ),
-          ),
-          CoconutLayout.spacing_200h,
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 16),
-            decoration: BoxDecoration(
-              color: colors.surface,
-              borderRadius: BorderRadius.circular(CoconutStyles.radius_300),
-            ),
-            child: TextField(
-              controller: _amountController,
-              keyboardType: TextInputType.numberWithOptions(decimal: !_unit.isBasedOnSatoshi),
-              inputFormatters: [
-                FilteringTextInputFormatter.allow(RegExp(_unit.isBasedOnSatoshi ? r'[0-9]' : r'[0-9.,]')),
-              ],
-              onChanged: (_) => setState(() => _error = null),
-              style: CoconutTypography.body2_14_Number.setColor(colors.primaryText),
-              decoration: InputDecoration(
-                border: InputBorder.none,
-                hintText: 'Amount',
-                suffixText: _unit.symbol,
-                hintStyle: CoconutTypography.body2_14.setColor(colors.tertiaryText),
-              ),
-            ),
-          ),
-          if (_error != null) ...[
-            CoconutLayout.spacing_200h,
-            Text(_error!, style: CoconutTypography.body3_12.setColor(colors.danger)),
-          ],
-          CoconutLayout.spacing_400h,
-          CoconutButton(
-            text: 'Add',
-            onPressed: _add,
-            height: 52,
-            backgroundColor: colors.primary,
-            foregroundColor: colors.background,
-          ),
-        ],
-      ),
-    );
-  }
 }

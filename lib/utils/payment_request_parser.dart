@@ -59,6 +59,9 @@ class PaymentRequest {
 
   bool get hasArkOrLightning => arkAddress != null || lightningInvoice != null || lightningAddress != null;
 
+  /// Whether it can be paid at all (not unsupported or unknown).
+  bool get isPayable => kind != PaymentRequestKind.unsupported && kind != PaymentRequestKind.unknown;
+
   /// The ways to pay it from Ark, cheapest first: an Ark payment, then Lightning, then on-chain.
   List<ArkPaymentOption> get arkOptions => [
     if (arkAddress != null) ArkPaymentOption(ArkPaymentRail.ark, arkAddress!),

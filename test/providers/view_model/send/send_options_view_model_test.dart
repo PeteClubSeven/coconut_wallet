@@ -77,52 +77,59 @@ void main() {
     sendInfo = SendInfoProvider();
   });
 
-  SendOptionsViewModel create(String input, {List<UtxoState>? walletUtxos, RecommendedFee? fees}) =>
-      SendOptionsViewModel(
-        request: PaymentRequest.parse(input, NetworkType.regtest),
-        wallet: WalletMock.createSingleSigWalletItem(),
-        utxos: walletUtxos ?? utxos,
-        changeDerivationPath: "m/84'/1'/0'/1/0",
-        ark: ark,
-        sendInfoProvider: sendInfo,
-        network: NetworkType.regtest,
-        loadRecommendedFees: () async => fees,
-      );
+  SendOptionsViewModel createMany(
+    List<(String, int?)> recipients, {
+    bool maxLast = false,
+    List<UtxoState>? walletUtxos,
+    RecommendedFee? fees,
+  }) => SendOptionsViewModel(
+    recipients: [
+      for (final (input, amount) in recipients)
+        SendRecipientInput(PaymentRequest.parse(input, NetworkType.regtest), amount),
+    ],
+    maxLast: maxLast,
+    wallet: WalletMock.createSingleSigWalletItem(),
+    utxos: walletUtxos ?? utxos,
+    changeDerivationPath: "m/84'/1'/0'/1/0",
+    ark: ark,
+    sendInfoProvider: sendInfo,
+    loadRecommendedFees: () async => fees,
+  );
+
+  SendOptionsViewModel create(String input, {int? amount, RecommendedFee? fees}) =>
+      createMany([(input, amount ?? PaymentRequest.parse(input, NetworkType.regtest).amountSats)], fees: fees);
 
   Future<void> settle() => Future<void>.delayed(Duration.zero);
 
   List<SendOptionKind> kinds(SendOptionsViewModel vm) => vm.options.map((option) => option.kind).toList();
 
-  test('each kind of request yields its ways to pay', () {
-    expect(kinds(create(_bitcoin)), [SendOptionKind.onchain, SendOptionKind.onchainViaArk]);
-    expect(kinds(create(_ark)), [SendOptionKind.ark]);
+  test('one recipient can be paid every way its request allows', () {
+    expect(kinds(create(_bitcoin, amount: 1000)), [SendOptionKind.onchain, SendOptionKind.onchainViaArk]);
+    expect(kinds(create(_ark, amount: 1000)), [SendOptionKind.ark]);
     expect(kinds(create(_invoice)), [SendOptionKind.lightning]);
-    expect(kinds(create('satoshi@example.com')), [SendOptionKind.lightning]);
+    expect(kinds(create('satoshi@example.com', amount: 1000)), [SendOptionKind.lightning]);
     expect(kinds(create('bitcoin:$_bitcoin?amount=0.0001&ark=$_ark&lightning=$_invoice')), [
       SendOptionKind.ark,
       SendOptionKind.lightning,
       SendOptionKind.onchain,
       SendOptionKind.onchainViaArk,
     ]);
-    final lightningAddress = create('satoshi@example.com').options.single;
-    expect(lightningAddress.rail, ArkPaymentRail.lightningAddress);
+    expect(create('satoshi@example.com', amount: 1000).options.single.rail, ArkPaymentRail.lightningAddress);
+    expect(create(_invoice).amountSats, 30000);
   });
 
-  test('an invoice fixes the amount; anything else takes the amount entered', () async {
-    final invoice = create(_invoice);
-    invoice.setEnteredAmount(5000);
-    expect(invoice.amountSats, 30000);
-    expect(invoice.canUseMax, isFalse);
+  test('several recipients, or Max, are on-chain only', () {
+    final several = createMany([(_bitcoin, 10000), ('bitcoin:$_otherBitcoin?ark=$_ark', 20000)]);
+    expect(kinds(several), [SendOptionKind.onchain]);
+    expect(several.isBatch, isTrue);
 
-    final address = create(_bitcoin);
-    expect(address.amountSats, isNull);
-    address.setEnteredAmount(20000);
-    expect(address.amountSats, 20000);
-    expect(address.canUseMax, isTrue);
+    final max = createMany([('bitcoin:$_bitcoin?ark=$_ark', null)], maxLast: true);
+    expect(kinds(max), [SendOptionKind.onchain]);
+    expect(max.isMaxMode, isTrue);
   });
 
   test('balances follow the UTXOs picked', () {
-    final vm = create(_bitcoin);
+    final vm = create(_bitcoin, amount: 1000);
     expect(vm.onchainAvailableSats, 300000);
     expect(vm.arkSpendableSats, 100000);
     expect(vm.isUtxoAuto, isTrue);
@@ -136,9 +143,8 @@ void main() {
     expect(vm.onchainAvailableSats, 300000);
   });
 
-  test('the on-chain fee follows the amount, UTXOs and fee rate', () async {
-    final vm = create(_bitcoin, fees: RecommendedFee(10, 2, 1, 1, 1));
-    vm.setEnteredAmount(50000);
+  test('the on-chain fee follows the UTXOs and fee rate', () async {
+    final vm = create(_bitcoin, amount: 50000, fees: RecommendedFee(10, 2, 1, 1, 1));
     expect(vm.statusOf(vm.onchainOption!).isEstimating, isTrue); // no fee rate yet
 
     await vm.refreshRecommendedFees();
@@ -153,13 +159,13 @@ void main() {
     vm.setSelectedUtxos(utxos);
     expect(vm.statusOf(vm.onchainOption!).feeSats!, greaterThan(atTen)); // two inputs
 
-    vm.setEnteredAmount(400000);
-    expect(vm.statusOf(vm.onchainOption!).problem, 'Not enough on-chain');
+    final tooMuch = create(_bitcoin, amount: 400000, fees: RecommendedFee(1, 1, 1, 1, 1));
+    await tooMuch.refreshRecommendedFees();
+    expect(tooMuch.statusOf(tooMuch.onchainOption!).problem, 'Not enough on-chain');
   });
 
   test('without recommended fees the user has to set a rate', () async {
-    final vm = create(_bitcoin);
-    vm.setEnteredAmount(50000);
+    final vm = create(_bitcoin, amount: 50000);
     await vm.refreshRecommendedFees();
     expect(vm.statusOf(vm.onchainOption!).problem, 'Set a fee rate');
     vm.feeRateController.text = '3';
@@ -167,74 +173,52 @@ void main() {
     expect(vm.statusOf(vm.onchainOption!).isReady, isTrue);
   });
 
-  test('Max sends what the picked UTXOs hold, less the fee and the other recipients', () async {
-    final vm = create(_bitcoin, fees: RecommendedFee(1, 1, 1, 1, 1));
-    await vm.refreshRecommendedFees();
-    vm.setSelectedUtxos([utxos.last]);
-    vm.setMaxMode(true);
-    final fee = vm.onchainFeeSats!;
-    expect(vm.amountSats, 200000 - fee);
-    expect(vm.selected!.kind, SendOptionKind.onchain);
-    expect(vm.statusOf(vm.options[1]).problem, 'Max is for on-chain only');
+  test('Max gives the last recipient what the picked UTXOs hold, less the others and the fee', () async {
+    final single = createMany([(_bitcoin, null)], maxLast: true, fees: RecommendedFee(1, 1, 1, 1, 1));
+    await single.refreshRecommendedFees();
+    single.setSelectedUtxos([utxos.last]);
+    expect(single.amountSats, 200000 - single.onchainFeeSats!);
+    expect(single.totalSats, 200000 - single.onchainFeeSats!);
 
-    expect(vm.addRecipient(_otherBitcoin, 50000), isNull);
-    expect(vm.amountSats, 200000 - 50000 - vm.onchainFeeSats!);
-    expect(vm.statusOf(vm.onchainOption!).isReady, isTrue);
-
-    vm.setEnteredAmount(10000);
-    expect(vm.isMaxMode, isFalse);
-    expect(vm.amountSats, 10000);
-  });
-
-  test('more recipients are on-chain only', () async {
-    final vm = create('bitcoin:$_bitcoin?ark=$_ark', fees: RecommendedFee(1, 1, 1, 1, 1));
-    await vm.refreshRecommendedFees();
-    vm.setEnteredAmount(20000);
-    await settle();
-    expect(vm.selected!.kind, SendOptionKind.ark); // cheapest
-
-    expect(vm.addRecipient(_ark, 10000), startsWith('Only Bitcoin addresses'));
-    expect(vm.addRecipient(_invoice, 10000), startsWith('Only Bitcoin addresses'));
-    expect(vm.addRecipient(_bitcoin, 10000), 'This address is already a recipient');
-    expect(vm.addRecipient(_otherBitcoin, 100), 'The amount is below the dust limit');
-    expect(vm.addRecipient('bitcoin:$_otherBitcoin?amount=0.0001', 10000), isNull);
-    expect(vm.addRecipient(_otherBitcoin, 10000), 'This address is already a recipient');
-
-    expect(vm.extraRecipients.single.address, _otherBitcoin);
-    expect(vm.selected!.kind, SendOptionKind.onchain);
-    expect(vm.statusOf(vm.options.first).problem, 'Ark pays one destination');
-    expect(vm.statusOf(vm.onchainOption!).isReady, isTrue);
-
-    vm.removeRecipient(0);
-    expect(vm.extraRecipients, isEmpty);
-    await settle();
-    expect(vm.statusOf(vm.options.first).isReady, isTrue);
+    final several = createMany(
+      [(_otherBitcoin, 50000), (_bitcoin, null)],
+      maxLast: true,
+      fees: RecommendedFee(1, 1, 1, 1, 1),
+    );
+    await several.refreshRecommendedFees();
+    several.setSelectedUtxos([utxos.last]);
+    expect(several.amountOf(0), 50000);
+    expect(several.amountOf(1), 200000 - 50000 - several.onchainFeeSats!);
+    expect(several.statusOf(several.onchainOption!).isReady, isTrue);
+    several.saveOnchainForConfirm(SendEntryPoint.walletDetail);
+    expect(sendInfo.isMaxMode, isTrue);
   });
 
   test('Ark options say why they can\'t be used', () async {
     ark.isOpen = false;
-    final vm = create(_bitcoin);
-    vm.setEnteredAmount(200);
-    final viaArk = vm.options.last;
-    expect(vm.statusOf(viaArk).problem, 'Ark is locked');
-    expect(vm.statusOf(viaArk).canUnlock, isTrue);
+    final locked = create(_bitcoin, amount: 20000);
+    final viaArk = locked.options.last;
+    expect(locked.statusOf(viaArk).problem, 'Ark is locked');
+    expect(locked.statusOf(viaArk).canUnlock, isTrue);
 
     ark.isOpen = true;
-    vm.onArkChanged();
-    expect(vm.statusOf(viaArk).problem, 'The amount is below the dust limit');
-
-    vm.setEnteredAmount(99000);
+    locked.onArkChanged();
     await settle();
-    expect(vm.statusOf(viaArk).problem, 'Not enough in Ark'); // 99,000 + 2,530 > 100,000
+    expect(locked.statusOf(viaArk).isReady, isTrue);
+
+    expect(create(_bitcoin, amount: 200).statusOf(viaArk).problem, 'The amount is below the dust limit');
+
+    final short = create(_bitcoin, amount: 99000);
+    await settle();
+    expect(short.statusOf(viaArk).problem, 'Not enough in Ark'); // 99,000 + 2,530 > 100,000
 
     ark.acceptsAddress = false;
-    final arkVm = create(_ark);
-    arkVm.setEnteredAmount(1000);
+    final arkVm = create(_ark, amount: 1000);
     await settle();
     expect(arkVm.statusOf(arkVm.options.single).problem, contains('doesn\'t accept this Ark address'));
 
     ark.isSupported = false;
-    expect(create(_ark).statusOf(arkVm.options.single).problem, 'This wallet has no Ark');
+    expect(create(_ark, amount: 1000).statusOf(arkVm.options.single).problem, 'This wallet has no Ark');
   });
 
   test('the cheapest option that can be paid is preselected until the user picks one', () async {
@@ -252,37 +236,30 @@ void main() {
     await settle();
     expect(tie.selected!.kind, SendOptionKind.ark); // the earlier option wins a tie
 
-    final picked = create(_bitcoin, fees: RecommendedFee(1, 1, 1, 1, 1));
+    final picked = create(_bitcoin, amount: 20000, fees: RecommendedFee(1, 1, 1, 1, 1));
     await picked.refreshRecommendedFees();
-    picked.setEnteredAmount(20000);
     await settle();
     expect(picked.selected!.kind, SendOptionKind.onchain); // a few hundred sats vs 2,530
     picked.select(picked.options.last);
-    picked.setEnteredAmount(30000);
+    picked.onArkChanged();
     await settle();
     expect(picked.selected!.kind, SendOptionKind.onchainViaArk); // the user's pick is kept
   });
 
-  test('a late estimate for an old amount is ignored', () async {
+  test('an estimate that arrives after the screen closed is ignored', () async {
     ark.pending = [];
-    final vm = create(_ark);
-    vm.setEnteredAmount(10000);
-    vm.setEnteredAmount(20000);
+    final vm = create(_ark, amount: 10000);
     await settle();
-    expect(ark.estimatedAmounts, [10000, 20000]);
-
-    ark.pending![1].complete(7);
-    await settle();
-    ark.pending![0].complete(3);
-    await settle();
-    expect(vm.statusOf(vm.options.single).feeSats, 7);
+    expect(ark.estimatedAmounts, [10000]);
+    vm.dispose();
+    ark.pending!.single.complete(7);
+    await settle(); // no notification after dispose
   });
 
   test('the on-chain transaction is handed to the confirm screen', () async {
-    final vm = create(_bitcoin, fees: RecommendedFee(1, 1, 1, 1, 1));
+    final vm = createMany([(_bitcoin, 50000), (_otherBitcoin, 30000)], fees: RecommendedFee(1, 1, 1, 1, 1));
     await vm.refreshRecommendedFees();
-    vm.setEnteredAmount(50000);
-    expect(vm.addRecipient(_otherBitcoin, 30000), isNull);
+    expect(vm.totalSats, 80000);
     vm.saveOnchainForConfirm(SendEntryPoint.walletDetail);
 
     expect(sendInfo.walletId, 1);

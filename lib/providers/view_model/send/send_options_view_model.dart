@@ -1,4 +1,3 @@
-import 'package:coconut_lib/coconut_lib.dart';
 import 'package:coconut_wallet/config/number_format_config.dart';
 import 'package:coconut_wallet/constants/dust_constants.dart';
 import 'package:coconut_wallet/core/exceptions/transaction_creation/transaction_creation_exception.dart';
@@ -49,12 +48,12 @@ class SendOptionStatus {
   bool get isReady => problem == null && !isEstimating && feeSats != null;
 }
 
-/// Another on-chain recipient in the same transaction.
-class SendRecipient {
-  const SendRecipient(this.address, this.amountSats);
+/// A recipient from Send's first page and the amount it gets (null for the last one with Max).
+class SendRecipientInput {
+  const SendRecipientInput(this.request, this.amountSats);
 
-  final String address;
-  final int amountSats;
+  final PaymentRequest request;
+  final int? amountSats;
 }
 
 /// What the options need from the wallet's Ark side, so tests can fake it.
@@ -85,38 +84,46 @@ class ArkProviderSendAccess implements SendArkAccess {
   Future<bool> validateAddress(String address) => _arkProvider.validateArkAddress(_walletId, address);
 }
 
-/// The second step of Send for a hot wallet with Ark: the amount and the ways to pay a recipient.
-/// The on-chain way builds the transaction here (UTXOs, fee rate, extra recipients, Max) and
-/// hands it to the confirm screen; the Ark ways are paid by the screen through [ArkProvider].
+/// The second step of Send for a hot wallet with Ark: the ways to pay the recipients chosen on the
+/// first. One recipient can be paid from Ark (Ark, Lightning, on-chain via Ark) or on-chain from
+/// the wallet's UTXOs; several, or Max, only on-chain, in one transaction. The on-chain way builds
+/// the transaction here (UTXOs, fee rate) and hands it to the confirm screen; the Ark ways are
+/// paid by the screen through [ArkProvider].
 class SendOptionsViewModel extends ChangeNotifier with FeeRateMixin {
   SendOptionsViewModel({
-    required this.request,
+    required this.recipients,
+    this.maxLast = false,
     required WalletItemBase wallet,
     required List<UtxoState> utxos,
     required String changeDerivationPath,
     required SendArkAccess ark,
     required SendInfoProvider sendInfoProvider,
-    NetworkType? network,
     Future<RecommendedFee?> Function()? loadRecommendedFees,
   }) : _wallet = wallet,
        _unspentUtxos = utxos.where((utxo) => utxo.status == UtxoStatus.unspent).toList(),
        _changeDerivationPath = changeDerivationPath,
        _ark = ark,
        _sendInfoProvider = sendInfoProvider,
-       _network = network ?? NetworkType.currentNetworkType,
-       _loadRecommendedFees = loadRecommendedFees ?? FeeService().getRecommendedFees {
-    options = _optionsFor(request);
+       _loadRecommendedFees = loadRecommendedFees ?? FeeService().getRecommendedFees,
+       assert(recipients.isNotEmpty) {
+    options =
+        recipients.length == 1 && !maxLast
+            ? _optionsFor(request)
+            : [if (request.bitcoinAddress != null) SendOption(SendOptionKind.onchain, request.bitcoinAddress!)];
     feeRateController.addListener(_onFeeRateTextChanged);
     _refresh();
   }
 
-  final PaymentRequest request;
+  final List<SendRecipientInput> recipients;
+
+  /// The last recipient gets everything left on-chain.
+  final bool maxLast;
+
   final WalletItemBase _wallet;
   final List<UtxoState> _unspentUtxos;
   final String _changeDerivationPath;
   final SendArkAccess _ark;
   final SendInfoProvider _sendInfoProvider;
-  final NetworkType _network;
   final Future<RecommendedFee?> Function() _loadRecommendedFees;
 
   late final List<SendOption> options;
@@ -124,11 +131,8 @@ class SendOptionsViewModel extends ChangeNotifier with FeeRateMixin {
   final TextEditingController feeRateController = TextEditingController();
   final FocusNode feeRateFocusNode = FocusNode();
 
-  int? _enteredAmountSats;
-  bool _isMaxMode = false;
   List<UtxoState>? _selectedUtxos;
   double? _feeRate;
-  final List<SendRecipient> _extraRecipients = [];
 
   TransactionBuildResult? _onchainResult;
   final Map<SendOptionKind, String> _arkKeys = {};
@@ -154,42 +158,44 @@ class SendOptionsViewModel extends ChangeNotifier with FeeRateMixin {
     ],
   ];
 
-  // --- Amount ---
+  // --- Recipients and amounts ---
 
-  /// The amount the request carries (an invoice's, or a BIP321 `amount`), which can't be changed.
-  int? get fixedAmountSats => request.amountSats;
+  /// The first (with one recipient, the only) payment request.
+  PaymentRequest get request => recipients.first.request;
 
-  bool get isMaxMode => _isMaxMode;
+  bool get isBatch => recipients.length > 1;
 
-  bool get canUseMax => fixedAmountSats == null && onchainOption != null;
+  bool get isMaxMode => maxLast;
 
-  /// What the main recipient gets: the fixed or entered amount, or with Max what's left of the
-  /// on-chain funds after the other recipients and the fee.
-  int? get amountSats {
-    if (_isMaxMode) {
+  /// What recipient [index] gets. With Max the last one gets what's left of the on-chain funds
+  /// after the others and the fee, known once the transaction is built.
+  int? amountOf(int index) {
+    if (maxLast && index == recipients.length - 1) {
       final fee = onchainFeeSats;
-      return fee == null ? null : onchainAvailableSats - _extraTotal - fee;
+      return fee == null ? null : onchainAvailableSats - _othersTotal - fee;
     }
-    return fixedAmountSats ?? _enteredAmountSats;
+    return recipients[index].amountSats;
   }
 
-  void setEnteredAmount(int? sats) {
-    if (fixedAmountSats != null) return;
-    if (_enteredAmountSats == sats && !_isMaxMode) return;
-    _enteredAmountSats = sats;
-    _isMaxMode = false;
-    _refresh();
+  /// What the first recipient gets; for a single recipient, the payment's amount.
+  int? get amountSats => amountOf(0);
+
+  /// What all recipients get together, once known.
+  int? get totalSats {
+    var total = 0;
+    for (var i = 0; i < recipients.length; i++) {
+      final amount = amountOf(i);
+      if (amount == null) return null;
+      total += amount;
+    }
+    return total;
   }
 
-  void setMaxMode(bool enabled) {
-    if (!canUseMax || _isMaxMode == enabled) return;
-    _isMaxMode = enabled;
-    if (enabled) {
-      _selected = onchainOption;
-      _userSelected = true;
-    }
-    _refresh();
-  }
+  /// The fixed amounts of every recipient but a Max one.
+  int get _othersTotal => [
+    for (var i = 0; i < recipients.length; i++)
+      if (!(maxLast && i == recipients.length - 1)) recipients[i].amountSats ?? 0,
+  ].fold(0, (total, amount) => total + amount);
 
   // --- Balances ---
 
@@ -264,40 +270,6 @@ class SendOptionsViewModel extends ChangeNotifier with FeeRateMixin {
     _refresh();
   }
 
-  // --- Extra recipients ---
-
-  List<SendRecipient> get extraRecipients => List.unmodifiable(_extraRecipients);
-
-  int get _extraTotal => _extraRecipients.fold(0, (total, recipient) => total + recipient.amountSats);
-
-  /// Adds an on-chain recipient, or returns why it can't be added.
-  String? addRecipient(String input, int amountSats) {
-    final option = onchainOption;
-    if (option == null) return 'Only on-chain payments can have more recipients';
-    final parsed = PaymentRequest.parse(input, _network);
-    final address = parsed.bitcoinAddress;
-    if (address == null) {
-      return parsed.hasArkOrLightning
-          ? 'Only Bitcoin addresses can be added: Ark pays one destination'
-          : (parsed.problem ?? 'Not a Bitcoin address');
-    }
-    final normalized = normalizeAddress(address);
-    final taken = {option.destination, ..._extraRecipients.map((recipient) => recipient.address)};
-    if (taken.contains(normalized)) return 'This address is already a recipient';
-    if (amountSats <= _dustThreshold) return 'The amount is below the dust limit';
-    _extraRecipients.add(SendRecipient(normalized, amountSats));
-    _selected = option;
-    _userSelected = true;
-    _refresh();
-    return null;
-  }
-
-  void removeRecipient(int index) {
-    if (index < 0 || index >= _extraRecipients.length) return;
-    _extraRecipients.removeAt(index);
-    _refresh();
-  }
-
   // --- Options ---
 
   SendOption? get onchainOption => options.where((option) => option.kind == SendOptionKind.onchain).firstOrNull;
@@ -307,11 +279,6 @@ class SendOptionsViewModel extends ChangeNotifier with FeeRateMixin {
   void select(SendOption option) {
     _selected = option;
     _userSelected = true;
-    if (option.kind != SendOptionKind.onchain && _isMaxMode) {
-      _isMaxMode = false;
-      _refresh();
-      return;
-    }
     _notify();
   }
 
@@ -330,8 +297,8 @@ class SendOptionsViewModel extends ChangeNotifier with FeeRateMixin {
   SendOptionStatus statusOf(SendOption option) {
     if (option.kind == SendOptionKind.onchain) return _onchainStatus();
     if (!_ark.isSupported) return const SendOptionStatus(problem: 'This wallet has no Ark');
-    if (_extraRecipients.isNotEmpty) return const SendOptionStatus(problem: 'Ark pays one destination');
-    if (_isMaxMode) return const SendOptionStatus(problem: 'Max is for on-chain only');
+    if (isBatch) return const SendOptionStatus(problem: 'Ark pays one destination');
+    if (maxLast) return const SendOptionStatus(problem: 'Max is for on-chain only');
     if (!_ark.isOpen) return const SendOptionStatus(problem: 'Ark is locked', canUnlock: true);
     final amount = amountSats;
     if (amount == null || amount <= 0) return const SendOptionStatus(problem: 'Enter an amount');
@@ -355,10 +322,11 @@ class SendOptionsViewModel extends ChangeNotifier with FeeRateMixin {
         problem: _feeFetchStatus == RecommendedFeeFetchStatus.fetching ? null : 'Set a fee rate',
       );
     }
-    final amount = _isMaxMode ? null : amountSats;
-    if (!_isMaxMode && (amount == null || amount <= 0)) return const SendOptionStatus(problem: 'Enter an amount');
-    if (!_isMaxMode && amount! <= _dustThreshold) {
-      return const SendOptionStatus(problem: 'The amount is below the dust limit');
+    for (var i = 0; i < recipients.length; i++) {
+      if (maxLast && i == recipients.length - 1) continue;
+      final amount = recipients[i].amountSats;
+      if (amount == null || amount <= 0) return const SendOptionStatus(problem: 'Enter an amount');
+      if (amount <= _dustThreshold) return const SendOptionStatus(problem: 'An amount is below the dust limit');
     }
     final result = _onchainResult;
     if (result == null) return const SendOptionStatus(isEstimating: true);
@@ -388,7 +356,7 @@ class SendOptionsViewModel extends ChangeNotifier with FeeRateMixin {
     _sendInfoProvider.setIsMultisig(_wallet.walletType == WalletType.multiSignature);
     _sendInfoProvider.setWalletImportSource(_wallet.walletImportSource);
     _sendInfoProvider.setFeeRate(_feeRate!);
-    _sendInfoProvider.setIsMaxMode(_isMaxMode);
+    _sendInfoProvider.setIsMaxMode(maxLast);
   }
 
   // --- Internals ---
@@ -409,37 +377,34 @@ class SendOptionsViewModel extends ChangeNotifier with FeeRateMixin {
     final option = onchainOption;
     final feeRate = _feeRate;
     if (option == null || feeRate == null || onchainAvailableSats <= 0) return;
-    final Map<String, int> recipients;
-    if (_isMaxMode) {
-      final rest = onchainAvailableSats - _extraTotal;
-      if (rest <= _dustThreshold) {
-        _onchainResult = const TransactionBuildResult(
-          transaction: null,
-          selectedUtxos: null,
-          estimatedFee: 0,
-          exception: SendAmountTooLowException(estimatedFee: 0),
-        );
+    // In order: with Max the last recipient gets the rest, and the builder takes the fee from it.
+    final outputs = <String, int>{};
+    for (var i = 0; i < recipients.length; i++) {
+      final address = recipients[i].request.bitcoinAddress;
+      if (address == null) return;
+      final isMax = maxLast && i == recipients.length - 1;
+      final amount = isMax ? onchainAvailableSats - _othersTotal : recipients[i].amountSats;
+      if (amount == null || amount <= _dustThreshold) {
+        if (isMax) {
+          _onchainResult = const TransactionBuildResult(
+            transaction: null,
+            selectedUtxos: null,
+            estimatedFee: 0,
+            exception: SendAmountTooLowException(estimatedFee: 0),
+          );
+        }
         return;
       }
-      // The builder takes the fee from the last recipient, so the Max one goes last.
-      recipients = {for (final recipient in _extraRecipients) recipient.address: recipient.amountSats};
-      recipients[option.destination] = rest;
-    } else {
-      final amount = amountSats;
-      if (amount == null || amount <= _dustThreshold) return;
-      recipients = {
-        option.destination: amount,
-        for (final recipient in _extraRecipients) recipient.address: recipient.amountSats,
-      };
+      outputs[normalizeAddress(address)] = amount;
     }
     _onchainResult =
         TransactionBuilder(
           availableUtxos: _selectedUtxos ?? _unspentUtxos,
-          recipients: recipients,
+          recipients: outputs,
           feeRate: feeRate,
           changeDerivationPath: _changeDerivationPath,
           walletItemBase: _wallet,
-          isFeeSubtractedFromAmount: _isMaxMode,
+          isFeeSubtractedFromAmount: maxLast,
           isUtxoFixed: _selectedUtxos != null,
         ).build();
   }
@@ -451,7 +416,7 @@ class SendOptionsViewModel extends ChangeNotifier with FeeRateMixin {
       final blocked =
           !_ark.isSupported ||
           !_ark.isOpen ||
-          _isMaxMode ||
+          maxLast ||
           amount == null ||
           amount <= 0 ||
           (kind == SendOptionKind.onchainViaArk && amount <= ArkBoardTerms.dustLimitSats);
