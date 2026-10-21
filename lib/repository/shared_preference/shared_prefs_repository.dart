@@ -182,6 +182,17 @@ class SharedPrefsRepository {
     await deleteSharedPrefsWithKey(SharedPrefKeys.walletTargetDisabled(walletId));
   }
 
+  /// Whether the wallet screen shows the on-chain and off-chain balances under the total.
+  bool isWalletBalanceBreakdown(int walletId) => getBool(SharedPrefKeys.walletBalanceBreakdown(walletId));
+
+  Future<void> setWalletBalanceBreakdown(int walletId, bool shown) async {
+    await setBool(SharedPrefKeys.walletBalanceBreakdown(walletId), shown);
+  }
+
+  Future<void> removeWalletBalanceBreakdown(int walletId) async {
+    await deleteSharedPrefsWithKey(SharedPrefKeys.walletBalanceBreakdown(walletId));
+  }
+
   /// 지갑별 마지막 재동기화 완료 시각------------------------------------------------
   DateTime? getWalletLastResyncTimestamp(int walletId) {
     final String? encodedData = _sharedPrefs.getString(SharedPrefKeys.kWalletLastResyncMap);

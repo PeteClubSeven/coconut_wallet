@@ -68,6 +68,9 @@ class SharedPrefKeys {
   /// 목표 수량 사용 안 함 여부 (지갑별)
   static String walletTargetDisabled(int walletId) => 'WALLET_TARGET_DISABLED_$walletId';
 
+  /// A hot wallet with Ark shows its on-chain and off-chain balances under the total.
+  static String walletBalanceBreakdown(int walletId) => 'WALLET_BALANCE_BREAKDOWN_$walletId';
+
   /// 지갑별 마지막 재동기화 완료 시각 - Map<walletId, epochMillis> JSON
   static const String kWalletLastResyncMap = "WALLET_LAST_RESYNC_MAP";
 

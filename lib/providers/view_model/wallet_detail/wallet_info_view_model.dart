@@ -233,6 +233,14 @@ class WalletInfoViewModel extends ChangeNotifier {
   int? get targetSats => _sharedPrefs.getWalletTargetSats(_walletId);
   bool get isTargetDisabled => _sharedPrefs.isWalletTargetDisabled(_walletId);
 
+  /// Whether the wallet screen shows the on-chain and off-chain balances under the total.
+  bool get isBalanceBreakdown => _sharedPrefs.isWalletBalanceBreakdown(_walletId);
+
+  Future<void> setBalanceBreakdown(bool shown) async {
+    await _sharedPrefs.setWalletBalanceBreakdown(_walletId, shown);
+    if (!_disposed) notifyListeners();
+  }
+
   bool get isUpdatingTarget => _isUpdatingTarget;
 
   Future<bool> setTargetSats(int targetSats) => _updateTargetSats(targetSats);

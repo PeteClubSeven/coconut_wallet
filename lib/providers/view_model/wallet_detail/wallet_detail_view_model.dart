@@ -78,6 +78,14 @@ class WalletDetailViewModel extends ChangeNotifier {
 
   /// What the header shows: on-chain plus, for a hot wallet with Ark, the cached Ark balance.
   int get displayBalance => _walletProvider.getDisplayBalance(_walletId);
+
+  /// The off-chain (Ark) part of [displayBalance].
+  int get offchainBalance => displayBalance - balance;
+
+  /// Whether the header shows the on-chain and off-chain balances under the total (a hot wallet
+  /// with Ark that has it on in its settings).
+  bool get showsBalanceBreakdown =>
+      (_arkProvider?.supportsArkById(_walletId) ?? false) && _sharedPrefs.isWalletBalanceBreakdown(_walletId);
   int get utxoCount => _walletProvider.getUtxoList(_walletId).length;
   int? get targetSats => _sharedPrefs.getWalletTargetSats(_walletId);
   bool get isTargetDisabled => _sharedPrefs.isWalletTargetDisabled(_walletId);

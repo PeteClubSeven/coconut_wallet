@@ -335,6 +335,7 @@ class WalletProvider extends ChangeNotifier {
       () => _preferenceProvider.removeManualUtxoSelectionWalletId(walletId),
       () => _sharedPrefsRepository.removeWalletTargetSats(walletId),
       () => _sharedPrefsRepository.removeWalletTargetDisabled(walletId),
+      () => _sharedPrefsRepository.removeWalletBalanceBreakdown(walletId),
       () => _sharedPrefsRepository.removeFaucetHistory(walletId),
     ];
     for (final operation in operations) {

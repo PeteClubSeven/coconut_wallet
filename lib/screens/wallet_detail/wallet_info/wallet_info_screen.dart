@@ -21,6 +21,7 @@ import 'package:coconut_wallet/design_system/context/coconut_theme_context_exten
 import 'package:coconut_wallet/enums/wallet_enums.dart';
 import 'package:coconut_wallet/enums/fiat_enums.dart';
 import 'package:coconut_wallet/localization/strings.g.dart';
+import 'package:coconut_wallet/providers/ark_provider.dart';
 import 'package:coconut_wallet/providers/auth_provider.dart';
 import 'package:coconut_wallet/providers/node_provider/node_provider.dart';
 import 'package:coconut_wallet/providers/preferences/preference_provider.dart';
@@ -433,6 +434,21 @@ class _WalletInfoScreenState extends State<WalletInfoScreen> {
                                   _showLabelsManagementScreen(context, viewModel);
                                 },
                               ),
+                              if (context.read<ArkProvider>().supportsArkById(widget.id))
+                                _walletInfoMenu(
+                                  title: t.ark.wallet.balance_breakdown,
+                                  showArrowRight: false,
+                                  rightWidget: CoconutSwitch(
+                                    isOn: viewModel.isBalanceBreakdown,
+                                    activeTrackColor: context.coconutColors.switchActiveTrack,
+                                    activeThumbColor: context.coconutColors.switchActiveThumb,
+                                    inactiveTrackColor: context.coconutColors.switchInactiveTrack,
+                                    inactiveThumbColor: context.coconutColors.switchInactiveThumb,
+                                    onChanged: viewModel.setBalanceBreakdown,
+                                    scale: 0.75,
+                                  ),
+                                  onPressed: () => viewModel.setBalanceBreakdown(!viewModel.isBalanceBreakdown),
+                                ),
                             ],
                           ),
                         ),

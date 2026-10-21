@@ -121,7 +121,11 @@ class _WalletDetailScreenState extends State<WalletDetailScreen> with TickerProv
   /// The transaction list is shared between wallets: another wallet's detail screen opened on
   /// top (a vault just added from Move) leaves its list behind, so this wallet's is loaded again.
   @override
-  void didPopNext() => context.read<TransactionProvider>().initTxList(widget.id);
+  void didPopNext() {
+    context.read<TransactionProvider>().initTxList(widget.id);
+    // Settings may have changed how the balance shows.
+    setState(() {});
+  }
 
   @override
   void dispose() {
@@ -291,10 +295,40 @@ class _WalletDetailScreenState extends State<WalletDetailScreen> with TickerProv
                   ),
                 ),
               ),
+              if (viewModel.showsBalanceBreakdown) ...[CoconutLayout.spacing_400h, _buildBalanceBreakdown(viewModel)],
             ],
           ),
         );
       },
+    );
+  }
+
+  /// The total's two parts under it, as a triangle: on-chain on the left, off-chain on the right.
+  Widget _buildBalanceBreakdown(WalletDetailViewModel viewModel) {
+    final colors = context.coconutColors;
+    Widget part(String label, int sats) => Expanded(
+      child: Column(
+        children: [
+          Text(label, style: CoconutTypography.body3_12.setColor(colors.secondaryText)),
+          CoconutLayout.spacing_100h,
+          FittedBox(
+            fit: BoxFit.scaleDown,
+            child: BitcoinAmountUnit(
+              currentUnit: viewModel.currentUnit,
+              unitStyle: CoconutTypography.body2_14_Number.setColor(colors.primaryText),
+              child: AnimatedBalance(
+                prevValue: sats,
+                value: sats,
+                currentUnit: viewModel.currentUnit,
+                textStyle: CoconutTypography.body1_16_NumberBold.setColor(colors.primaryText),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+    return Row(
+      children: [part(t.ark.wallet.onchain, viewModel.balance), part(t.ark.wallet.offchain, viewModel.offchainBalance)],
     );
   }
 

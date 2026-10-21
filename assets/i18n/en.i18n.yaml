@@ -2129,5 +2129,8 @@ ark:
     overview_description: "Balance • VTXOs"
     refresh: "Refresh"
     refresh_description: "Renew VTXOs"
+    balance_breakdown: "Show Separate Balances"
+    onchain: "On-chain"
+    offchain: "Off-chain"
   board:
     use_ark_wallet: "This is an Ark or Lightning request: send it from a hot wallet with Ark."
