@@ -43,6 +43,32 @@ class ArkSendRouteArgs {
   const ArkSendRouteArgs({required this.id, this.initialInput});
 }
 
+class SendRecipientRouteArgs {
+  final int id;
+  final SendEntryPoint sendEntryPoint;
+  final String? initialInput;
+  final int? initialAmountSats;
+  const SendRecipientRouteArgs({
+    required this.id,
+    required this.sendEntryPoint,
+    this.initialInput,
+    this.initialAmountSats,
+  });
+}
+
+class SendOptionsRouteArgs {
+  final int id;
+  final String input;
+  final SendEntryPoint sendEntryPoint;
+  final int? initialAmountSats;
+  const SendOptionsRouteArgs({
+    required this.id,
+    required this.input,
+    required this.sendEntryPoint,
+    this.initialAmountSats,
+  });
+}
+
 class ArkToOnchainRouteArgs {
   final int id;
   final int destinationWalletId;

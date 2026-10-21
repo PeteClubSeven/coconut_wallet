@@ -72,6 +72,8 @@ class _DeepLinkListenerState extends State<DeepLinkListener> {
         (firstWallet == null
             ? null
             : walletOrder.firstWhere((id) => id == firstWallet.id, orElse: () => firstWallet.id));
+    // A hot wallet with Ark starts Send from the recipient, then picks how to pay.
+    final startsAtRecipient = targetId != null && _supportsArk(targetId);
 
     _isHandlingBitcoinUri = true;
     _recentBitcoinUri = bitcoinUri;
@@ -83,10 +85,19 @@ class _DeepLinkListenerState extends State<DeepLinkListener> {
     }
 
     unawaited(
-      navigator.pushNamed(
-        AppRouteNames.send,
-        arguments: SendRouteArgs(id: targetId, sendEntryPoint: SendEntryPoint.home, initialBitcoinUri: bitcoinUri),
-      ),
+      startsAtRecipient
+          ? navigator.pushNamed(
+            AppRouteNames.sendRecipient,
+            arguments: SendRecipientRouteArgs(
+              id: targetId,
+              sendEntryPoint: SendEntryPoint.home,
+              initialInput: bitcoinUri,
+            ),
+          )
+          : navigator.pushNamed(
+            AppRouteNames.send,
+            arguments: SendRouteArgs(id: targetId, sendEntryPoint: SendEntryPoint.home, initialBitcoinUri: bitcoinUri),
+          ),
     );
 
     Future<void>.delayed(const Duration(milliseconds: 300)).then((_) {
@@ -96,16 +107,22 @@ class _DeepLinkListenerState extends State<DeepLinkListener> {
     });
   }
 
-  /// A code with `ark=` or `lightning=` goes to the first hot wallet (in the user's order) that
-  /// can pay it from Ark, whose send screen then hands it to Pay from Ark.
-  int? _arkWalletFor(String bitcoinUri, WalletProvider walletProvider, List<int> walletOrder) {
-    if (!PaymentRequest.parse(bitcoinUri, NetworkType.currentNetworkType).hasArkOrLightning) return null;
-    final ArkProvider arkProvider;
+  ArkProvider? get _arkProvider {
     try {
-      arkProvider = context.read<ArkProvider>();
+      return context.read<ArkProvider>();
     } on ProviderNotFoundException {
       return null;
     }
+  }
+
+  bool _supportsArk(int walletId) => _arkProvider?.supportsArkById(walletId) ?? false;
+
+  /// A code with `ark=` or `lightning=` goes to the first hot wallet (in the user's order) that
+  /// can pay it from Ark.
+  int? _arkWalletFor(String bitcoinUri, WalletProvider walletProvider, List<int> walletOrder) {
+    if (!PaymentRequest.parse(bitcoinUri, NetworkType.currentNetworkType).hasArkOrLightning) return null;
+    final arkProvider = _arkProvider;
+    if (arkProvider == null) return null;
     final wallets = [
       for (final id in walletOrder) ...walletProvider.walletItemList.where((wallet) => wallet.id == id),
       ...walletProvider.walletItemList.where((wallet) => !walletOrder.contains(wallet.id)),

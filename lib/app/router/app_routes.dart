@@ -21,6 +21,8 @@ import 'package:coconut_wallet/screens/review/negative_feedback_screen.dart';
 import 'package:coconut_wallet/screens/review/positive_feedback_screen.dart';
 import 'package:coconut_wallet/screens/send/broadcasting_complete_screen.dart';
 import 'package:coconut_wallet/screens/send/broadcasting_screen.dart';
+import 'package:coconut_wallet/screens/send/send_options_screen.dart';
+import 'package:coconut_wallet/screens/send/send_recipient_screen.dart';
 import 'package:coconut_wallet/screens/send/send_screen.dart';
 import 'package:coconut_wallet/screens/send/utxo_selection_screen.dart';
 import 'package:coconut_wallet/screens/send/send_confirm_screen.dart';
@@ -143,6 +145,26 @@ Map<String, WidgetBuilder> buildAppRoutes() {
             selectedUtxoList: args.selectedUtxoList,
             initialBitcoinUri: args.initialBitcoinUri,
             boardIntoWalletId: args.boardIntoWalletId,
+          ),
+        ),
+    AppRouteNames.sendRecipient:
+        (context) => _buildScreenWithArgs<SendRecipientRouteArgs>(
+          context,
+          (args) => SendRecipientScreen(
+            id: args.id,
+            sendEntryPoint: args.sendEntryPoint,
+            initialInput: args.initialInput,
+            initialAmountSats: args.initialAmountSats,
+          ),
+        ),
+    AppRouteNames.sendOptions:
+        (context) => _buildScreenWithArgs<SendOptionsRouteArgs>(
+          context,
+          (args) => SendOptionsScreen(
+            id: args.id,
+            input: args.input,
+            sendEntryPoint: args.sendEntryPoint,
+            initialAmountSats: args.initialAmountSats,
           ),
         ),
     AppRouteNames.arkWallet:

@@ -747,6 +747,18 @@ class _WalletDetailScreenState extends State<WalletDetailScreen> with TickerProv
                               labelMaxLines: null,
                               onTap: () {
                                 _logAction(WalletDetailAction.send);
+                                // A hot wallet with Ark starts from the recipient, then picks how to pay.
+                                if (context.read<ArkProvider>().supportsArk(_viewModel.wallet)) {
+                                  Navigator.pushNamed(
+                                    context,
+                                    AppRouteNames.sendRecipient,
+                                    arguments: SendRecipientRouteArgs(
+                                      id: widget.id,
+                                      sendEntryPoint: SendEntryPoint.walletDetail,
+                                    ),
+                                  );
+                                  return;
+                                }
                                 Navigator.pushNamed(
                                   context,
                                   AppRouteNames.send,
