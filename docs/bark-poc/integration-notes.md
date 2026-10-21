@@ -12,6 +12,9 @@ easy bark is to integrate.
 - **Milestone 3:** one "Move" between the hot wallet's on-chain balance, its Ark balance and the
   user's vaults (watch-only wallets signed with Coconut Vault), including boarding straight from
   a vault, with each move shown as one history entry.
+- **Milestone 4:** paying from Ark: Ark addresses, Lightning invoices and addresses, BIP321
+  codes and plain Bitcoin addresses, from a Pay screen or handed over by Coconut's send screen
+  and deep links.
 
 ## Setup
 
@@ -49,6 +52,14 @@ easy bark is to integrate.
   - **Vault → on-chain** is the vault's own send flow, receiving into the hot wallet.
   - A move is one history entry: the Ark movement carries the on-chain transaction its
     metadata names.
+- **Paying:** "Pay" in the VTXO section opens Pay from Ark, which takes an Ark address, a BOLT11
+  invoice, a Lightning address, a BIP321 code or a Bitcoin address. Coconut parses the string
+  itself (37) and pays a BIP321 code the cheapest way it offers: `sendArkoorPayment`, then
+  `payLightningInvoice(wait: false)` (later syncs finish it), then `sendOnchain`. Each payment
+  shows the server's fee estimate, then asks for confirmation and biometrics/PIN like an on-chain
+  send. Coconut's send screen, and `bitcoin:` deep links with `ark=` or `lightning=`, hand Ark
+  and Lightning requests to it; a code with an on-chain address only goes to Ark when the Ark
+  balance covers it.
 - **Unlocking:** bark keeps the seed for as long as a wallet is open. The first time a hot
   wallet is entered after launch, Coconut asks once (biometrics or PIN, plus the passphrase for
   "enter passphrase when signing" wallets) and keeps its Ark wallet open for the rest of the
@@ -59,9 +70,10 @@ easy bark is to integrate.
   a wallet is locked or offline. bark's own database can only be read through an open wallet.
 - **Sync:** bark is opened with `daemonManualSync: true` and the app drives it while in the
   foreground: `maintenanceDelegated()` every 60 s and on resume, `sync_()` every 5 s while the
-  receive screen waits for a payment. Every call into a wallet runs under a per-wallet lock.
-- **One wallet:** balance screens show on-chain + Ark (the 0.7.1 fields summed; see 29); spending
-  and Move to Vault keep the on-chain balance. The receive QR is `bitcoin:<address>?ark=<Ark
+  receive screen waits for a payment or a movement's detail screen is open. Every call into a
+  wallet runs under a per-wallet lock.
+- **One wallet:** balance screens show on-chain + Ark (the 0.7.1 fields summed; see 29); on-chain
+  sends keep the on-chain balance. The receive QR is `bitcoin:<address>?ark=<Ark
   address>&lightning=<invoice>`, with one copy row per method. "VTXO · N" sits next to the UTXO
   section. Ark movements are merged into the recent list, the full list and the home carousel
   through a `WalletActivity` type in view models; sync and RBF/CPFP code still see only on-chain
@@ -271,6 +283,42 @@ easy bark is to integrate.
     every tick (`-19: Multiple wallets are loaded`) and no blocks are mined until that wallet is
     unloaded. (Faucet repo, not bark.)
 
+### Paying from Ark (bark 0.7.1, bark-ffi 0.29.0)
+
+37. **Nothing to decode a payment request with.** bark-ffi pays BOLT11 invoices but has no
+    decoder, and `parse_payment_request` isn't exported (27). Coconut classifies the string itself
+    and reads an invoice's amount from its human-readable part, so it can't show the description,
+    payee or expiry, and an expired invoice is only caught when bark tries to pay it.
+38. **Payments don't say which movement they created.** `sendArkoorPayment` returns nothing;
+    `payLightningInvoice(wait: false)` returns an in-progress `LightningSend` (invoice, amount,
+    fee) with no payment hash or movement id; `sendOnchain` returns the txid. To open the
+    payment's entry afterwards, Coconut compares `history()` before and after the call under its
+    per-wallet lock.
+39. **The Lightning send expiry allows one block of lag.** bark sets the HTLC expiry to its own
+    chain tip + `htlc_send_expiry_delta` (258), and the server rejects anything below its tip +
+    delta − 1: "requested expiry is too low. our tip is 7765. sync your node and try again". The
+    wallet's tip comes from its chain source. With 5 s regtest blocks, electrs' Esplora was often
+    a block behind bitcoind, so most first attempts failed, even right after a sync. Coconut syncs
+    before a Lightning payment and retries twice on that message. bark could retry with the
+    server's tip (the error already reports it), or the server could allow a few blocks. On
+    mainnet this should be rare, but it can still happen right after a new block.
+40. **A Lightning send the server refuses stays pending forever.** When the server rejects a
+    payment at the start (as in 39), bark 0.7.1 leaves its movement `pending` with effective
+    balance 0 and no HTLC VTXOs, and later syncs never resolve it. Retrying the same invoice
+    creates a second movement with the same payment hash (movements 15 and 16 on the test
+    device). Coconut hides pending Lightning sends that have nothing locked.
+41. **bark's BIP321 codes key a regtest address as `tb=`.** `bark bip321 --all` writes
+    `bitcoin:?amount=…&lightning=…&tb=bcrt1p…&ark=…`. BIP321 names address parameters after the
+    address's human-readable part, which would be `bcrt=`. Coconut accepts `bc=`, `tb=` and
+    `bcrt=` when the path is empty. With the path empty, a BIP21-only wallet finds no on-chain
+    address to pay.
+42. **A short claim window on regtest.** A receiver's HTLC recv expiry + `htlc_expiry_delta` (40)
+    has to stay at or below the incoming HTLC's expiry. That left the receiver about 7 blocks
+    (35 s at 5 s blocks) to claim. The stack's CLI, claiming a minute after Coconut paid, was
+    refused ("Requested HTLC recv expiry too close to inbound HTLC expiry"). The server then failed
+    the payment within about 3 minutes, and bark returned all 15,000 sats with no fee: a clean
+    refund. On mainnet the window is over an hour, so this mostly affects tests.
+
 ## Verification results
 
 On the Pixel 10 emulator (Android 37.2, 16 KB pages) against `contrib/regtest`, 2026-10-19:
@@ -315,6 +363,21 @@ Milestone 3, same setup (Wallet 1: 0.86745 BTC on-chain + 199,720 Ark sats; a wa
 | Ark → Vault, 40,000 sats | "Sent on-chain" in the hot wallet; the vault received 0.0004 BTC |
 | Vault → Ark / Vault → On-chain | Board mode and move mode open for the vault (Send All: 39,878 sats to the funding address, "Move to Wallet 1" labels) up to Coconut Vault's unsigned QR. Signing needs the camera, so the rest is covered by unit tests (board registered with the unsigned PSBT before broadcast; nothing sent if the server refuses) |
 
+Milestone 4, same setup (Wallet 1 with about 0.25 BTC in Ark; the stack's bark CLI as the
+other side):
+
+| Scenario | Result |
+|---|---|
+| Ark address, 10,000 sats | Typed into Coconut's send screen, which handed it to Pay from Ark. bark validated the address and quoted a fee of 0; the app opened "Sent · Ark · successful" and the CLI received it |
+| Lightning invoice, 12,000 sats | Fee 48 sats. The first attempt was rejected for a stale chain tip (39) and the automatic retry succeeded: "Sent · Lightning · successful" once the CLI claimed it |
+| Unclaimed Lightning payment, 15,000 sats | The CLI claimed too late (42); the payment failed within about 3 minutes and the 15,000 sats came back. Earlier attempts rejected at the start left pending 0-sat movements (40), now hidden |
+| bark's own BIP321 code, 8,000 sats | From `bark bip321 --all` (Lightning, a `tb=` address and Ark); paid over Ark, the cheapest option |
+| Bitcoin address from Ark, 20,000 sats | `sendOnchain`: fee 2,530 sats, 22,530 sats left Ark |
+| Deep link `bitcoin:?amount=0.00004&ark=…` | First opened the first wallet's send screen (a watch-only wallet, with no address). It now opens Wallet 1's and goes on to Pay from Ark with the amount and address; the fee shows once the session is open. Without an amount the screen asks for one |
+
+Not checked on the device: Lightning addresses (the stack has no LNURL server), BOLT12 and
+LNURL (reported as unsupported), and an amountless invoice.
+
 Unit tests: milestone 1 added 7 `WalletProvider` tests (Ark creation before activation,
 rollback, the missing-seed guard, conversions, deletion, startup cleanup). Milestone 2 adds 29:
 Ark models (balance total, movement kinds, linked txid, destinations, snapshot comparison), the
@@ -324,12 +387,18 @@ unlock, open vs. create, shared prompt, delegated refresh), display balances, th
 the merged history order. Milestone 3 adds 18: board and offboard calls (sync requested
 mid-sync, funding address reuse, parked moves), broadcasting a board (registered before the
 broadcast, nothing sent when refused, retry and fallbacks, a transaction already on the
-network), the Move sheet's pairs, and pairing moves in the history. The full suite matches the
-upstream v0.20.0 baseline (the same 10 pre-existing failures).
+network), the Move sheet's pairs, and pairing moves in the history. Milestone 4 adds 18: the
+payment request parser (invoice amounts, networks, Ark and Lightning addresses, BIP321 with
+encoded values, address parameters and `req-` parameters, unsupported kinds), payments by rail
+with their movement, the stale-tip retry, and parked on-chain payments. The full suite matches
+the upstream v0.20.0 baseline (the same 10 pre-existing failures).
 
 ## Known PoC limitations
 
-- No paying from Ark (Ark addresses, Lightning, BIP321 send) and no exits yet.
+- No exits, BOLT12 offers or LNURL yet. Lightning addresses are untested on the device.
+- A Lightning payment that fails after starting disappears from the history (failed movements
+  with no balance change are hidden). The detail screen it opened shows "failed" while open.
+- Deep links with Ark or Lightning go to the first hot wallet with Ark; there's no wallet picker.
 - Vault → Ark and Vault → On-chain were driven on the emulator only up to Coconut Vault's QR.
 - After an upgrade, a hot wallet shows its on-chain balance only until its Ark wallet has been
   unlocked once; afterwards locked wallets show the last synced Ark data.
