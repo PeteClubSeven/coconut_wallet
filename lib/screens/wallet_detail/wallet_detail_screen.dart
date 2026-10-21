@@ -29,6 +29,7 @@ import 'package:coconut_wallet/providers/send_info_provider.dart';
 import 'package:coconut_wallet/providers/transaction_provider.dart';
 import 'package:coconut_wallet/providers/view_model/wallet_detail/wallet_detail_view_model.dart';
 import 'package:coconut_wallet/providers/wallet_provider.dart';
+import 'package:coconut_wallet/routes/route_observer.dart';
 import 'package:coconut_wallet/screens/ark/ark_movement_detail_screen.dart';
 import 'package:coconut_wallet/screens/ark/ark_unlock_flow.dart';
 import 'package:coconut_wallet/screens/settings/app_settings/app_settings_screen.dart';
@@ -70,7 +71,7 @@ class WalletDetailScreen extends StatefulWidget {
   State<WalletDetailScreen> createState() => _WalletDetailScreenState();
 }
 
-class _WalletDetailScreenState extends State<WalletDetailScreen> with TickerProviderStateMixin {
+class _WalletDetailScreenState extends State<WalletDetailScreen> with TickerProviderStateMixin, RouteAware {
   static const _nextWarningDelay = Duration(milliseconds: 400);
   late final WalletDetailViewModel _viewModel;
   final ValueNotifier<bool> _bottomActionButtonsExpandedNotifier = ValueNotifier<bool>(true);
@@ -111,7 +112,20 @@ class _WalletDetailScreenState extends State<WalletDetailScreen> with TickerProv
   }
 
   @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final route = ModalRoute.of(context);
+    if (route != null) routeObserver.subscribe(this, route);
+  }
+
+  /// The transaction list is shared between wallets: another wallet's detail screen opened on
+  /// top (a vault just added from Move) leaves its list behind, so this wallet's is loaded again.
+  @override
+  void didPopNext() => context.read<TransactionProvider>().initTxList(widget.id);
+
+  @override
   void dispose() {
+    routeObserver.unsubscribe(this);
     _bottomActionButtonsExpandedNotifier.dispose();
     _fireworksController.dispose();
     _fireworksFadeController.dispose();
