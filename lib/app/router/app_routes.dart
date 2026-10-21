@@ -140,6 +140,7 @@ Map<String, WidgetBuilder> buildAppRoutes() {
             initialSatsFromP2P: args.initialSatsFromP2P,
             selectedUtxoList: args.selectedUtxoList,
             initialBitcoinUri: args.initialBitcoinUri,
+            boardIntoWalletId: args.boardIntoWalletId,
           ),
         ),
     AppRouteNames.arkWallet:

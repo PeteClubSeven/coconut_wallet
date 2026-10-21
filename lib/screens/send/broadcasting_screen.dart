@@ -18,6 +18,7 @@ import 'package:coconut_wallet/design_system/context/coconut_theme_context_exten
 import 'package:coconut_wallet/enums/fiat_enums.dart';
 import 'package:coconut_wallet/localization/strings.g.dart';
 import 'package:coconut_wallet/model/error/app_error.dart';
+import 'package:coconut_wallet/providers/ark_provider.dart';
 import 'package:coconut_wallet/providers/connectivity_provider.dart';
 import 'package:coconut_wallet/providers/node_provider/node_provider.dart';
 import 'package:coconut_wallet/providers/preferences/preference_provider.dart';
@@ -550,6 +551,11 @@ class _BroadcastingScreenState extends State<BroadcastingScreen> with SingleTick
       Provider.of<TransactionDraftRepository>(context, listen: false),
       Provider.of<UtxoRepository>(context, listen: false),
       widget.signedTransactionDraftId,
+      // Only a board needs Ark.
+      arkProvider:
+          Provider.of<SendInfoProvider>(context, listen: false).arkBoard != null
+              ? Provider.of<ArkProvider>(context, listen: false)
+              : null,
     );
 
     WidgetsBinding.instance.addPostFrameCallback((duration) async {

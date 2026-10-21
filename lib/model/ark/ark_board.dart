@@ -41,3 +41,13 @@ class ArkMovePendingException implements Exception {
   @override
   String toString() => message;
 }
+
+/// A send that boards into hot wallet [walletId]'s Ark wallet through [funding]'s address. It
+/// travels with the transaction through signing (hot wallet or Coconut Vault) to broadcasting,
+/// where the board is registered just before the broadcast.
+class ArkBoardIntent {
+  const ArkBoardIntent({required this.walletId, required this.funding});
+
+  final int walletId;
+  final ArkBoardFunding funding;
+}

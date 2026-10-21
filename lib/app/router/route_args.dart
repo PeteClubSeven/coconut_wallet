@@ -98,6 +98,9 @@ class SendRouteArgs {
   final int? initialSatsFromP2P;
   final List<UtxoState>? selectedUtxoList;
   final String? initialBitcoinUri;
+
+  /// Board into this hot wallet's Ark wallet: the recipient is its board funding address.
+  final int? boardIntoWalletId;
   const SendRouteArgs({
     this.id,
     this.isMoveToVault = false,
@@ -107,6 +110,7 @@ class SendRouteArgs {
     this.initialSatsFromP2P,
     this.selectedUtxoList,
     this.initialBitcoinUri,
+    this.boardIntoWalletId,
   });
 }
 

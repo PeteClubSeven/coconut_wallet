@@ -25,6 +25,7 @@ import 'package:coconut_wallet/model/utxo/utxo_state.dart';
 import 'package:coconut_wallet/model/wallet/transaction_record.dart';
 import 'package:coconut_wallet/localization/strings.g.dart';
 import 'package:coconut_wallet/model/utxo/utxo_tag.dart';
+import 'package:coconut_wallet/providers/ark_provider.dart';
 import 'package:coconut_wallet/providers/connectivity_provider.dart';
 import 'package:coconut_wallet/providers/node_provider/node_provider.dart';
 import 'package:coconut_wallet/providers/preferences/block_explorer_provider.dart';
@@ -148,7 +149,11 @@ class _TransactionDetailScreenState extends State<TransactionDetailScreen> with 
                         CoconutLayout.spacing_500h,
                         _buildAmount(tx),
                         CoconutLayout.spacing_400h,
-                        if (_isTransactionStatusPending(txList.last) && viewModel.isSendType != null) ...[
+                        // A board's funding transaction can't be replaced: bark tracks its txid.
+                        if (_isTransactionStatusPending(txList.last) &&
+                            viewModel.isSendType != null &&
+                            !(viewModel.isSendType! &&
+                                context.read<ArkProvider>().fundsBoard(txList.last.transactionHash))) ...[
                           _buildFeeBumpingWidget(txList, viewModel),
                         ],
                         if (viewModel.isFetchingFromMempool) ...[

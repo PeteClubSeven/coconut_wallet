@@ -42,6 +42,9 @@ import 'package:coconut_wallet/model/wallet/wallet_item_base.dart';
 import 'package:coconut_wallet/model/wallet/wallet_address.dart';
 import 'package:coconut_wallet/providers/connectivity_provider.dart';
 import 'package:coconut_wallet/providers/auth_provider.dart';
+import 'package:coconut_wallet/model/ark/ark_board.dart';
+import 'package:coconut_wallet/providers/ark_provider.dart';
+import 'package:coconut_wallet/screens/ark/ark_unlock_flow.dart';
 import 'package:coconut_wallet/providers/preferences/preference_provider.dart';
 import 'package:coconut_wallet/providers/send_info_provider.dart';
 import 'package:coconut_wallet/providers/view_model/send/send_view_model.dart';
@@ -96,6 +99,9 @@ class SendScreen extends StatefulWidget {
   final List<UtxoState>? selectedUtxoList;
   final String? initialBitcoinUri;
 
+  /// Board mode: fund a board into this hot wallet's Ark wallet (see [SendRouteArgs]).
+  final int? boardIntoWalletId;
+
   const SendScreen({
     super.key,
     this.walletId,
@@ -106,6 +112,7 @@ class SendScreen extends StatefulWidget {
     this.initialSatsFromP2P,
     this.selectedUtxoList,
     this.initialBitcoinUri,
+    this.boardIntoWalletId,
   });
 
   @override
@@ -148,7 +155,7 @@ class _SendScreenState extends State<SendScreen> with SingleTickerProviderStateM
   // 스크롤 범위 연산에 사용하는 값들
   final double kCoconutAppbarHeight = 60;
   // 삭제 버튼이 없는 금고 보내기에서는 하단 예약 공간을 20px 줄입니다.
-  double get kPageViewHeight => widget.isMoveToVault && !_viewModel.isBatchMode ? 206 : 226;
+  double get kPageViewHeight => _hasFixedRecipient && !_viewModel.isBatchMode ? 206 : 226;
   final double kAddressBoardPosition = 186;
   final double kTooltipHeight = 43;
   final double kTooltipPadding = 5;
@@ -170,6 +177,19 @@ class _SendScreenState extends State<SendScreen> with SingleTickerProviderStateM
   final List<TextEditingController> _addressControllerList = [];
   List<WalletAddress> _vaultReceivingAddresses = [];
   String _receivingVaultName = '';
+
+  // Board mode: the recipient is the board funding address of [SendScreen.boardIntoWalletId].
+  ArkBoardFunding? _boardFunding;
+  String _boardWalletName = '';
+  int? _boardFeeSats;
+  int? _boardFeeAmount;
+  int? _boardFeeRequestedFor;
+  Timer? _boardFeeTimer;
+
+  bool get _isBoardMode => widget.boardIntoWalletId != null;
+
+  /// The recipient is fixed by the screen (a vault's addresses, or a board funding address).
+  bool get _hasFixedRecipient => widget.isMoveToVault || _isBoardMode;
   final List<FocusNode> _addressFocusNodeList = [];
   final List<VoidCallback> _addressTextListenerList = [];
   // 주소 입력란이 focus된 시점의 텍스트 기록, focus out 시점 텍스트와 비교하기 위함
@@ -228,6 +248,10 @@ class _SendScreenState extends State<SendScreen> with SingleTickerProviderStateM
       _addressControllerList.first.text = firstAddress.address;
       _loadVaultReceivingAddresses(walletProvider, vault, firstAddress.index);
     }
+    if (_isBoardMode) {
+      _boardWalletName = context.read<WalletProvider>().getWalletById(widget.boardIntoWalletId!).name;
+      WidgetsBinding.instance.addPostFrameCallback((_) => _prepareBoard());
+    }
     if (widget.initialSatsFromP2P != null) {
       // initialSatsFromP2P가 있는 경우, 계산기에서 '보내기'를 실행한 경우이므로, UTXO 자동 선택 모드로 기본 설정합니다.
       _viewModel.setIsUtxoSelectionAuto(true);
@@ -250,7 +274,7 @@ class _SendScreenState extends State<SendScreen> with SingleTickerProviderStateM
       });
     }
 
-    if (!widget.isMoveToVault && widget.initialBitcoinUri != null && widget.initialBitcoinUri!.isNotEmpty) {
+    if (!_hasFixedRecipient && widget.initialBitcoinUri != null && widget.initialBitcoinUri!.isNotEmpty) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (!mounted) return;
         _applyIncomingBitcoinUri(widget.initialBitcoinUri!, 0);
@@ -278,7 +302,8 @@ class _SendScreenState extends State<SendScreen> with SingleTickerProviderStateM
 
     // 수신자 카드를 보기 전까지 Bounce 애니메이션을 처리한다.
     hasSeenAddRecipientCard = context.read<PreferenceProvider>().hasSeenAddRecipientCard;
-    if (!hasSeenAddRecipientCard) {
+    // A board has a single recipient, so there's no recipient to add.
+    if (!hasSeenAddRecipientCard && !_isBoardMode) {
       WidgetsBinding.instance.addPostFrameCallback((_) async {
         await Future.delayed(const Duration(milliseconds: 300));
         // _startBounce();
@@ -377,6 +402,7 @@ class _SendScreenState extends State<SendScreen> with SingleTickerProviderStateM
 
   @override
   void dispose() {
+    _boardFeeTimer?.cancel();
     WidgetsBinding.instance.removeObserver(this);
     _vaultInfoTimer?.cancel();
     _ownAddressCheckTimer?.cancel();
@@ -556,7 +582,7 @@ class _SendScreenState extends State<SendScreen> with SingleTickerProviderStateM
                                         _buildCounter(context),
                                         _buildPageView(context),
                                         _buildBoard(context),
-                                        if (widget.isMoveToVault) _buildVaultInfoLabel(context),
+                                        if (_hasFixedRecipient) _buildVaultInfoLabel(context),
                                         if (_amountFocusNode.hasFocus || _feeRateFocusNode.hasFocus)
                                           _buildKeyboardToolbar(context),
                                       ],
@@ -587,7 +613,7 @@ class _SendScreenState extends State<SendScreen> with SingleTickerProviderStateM
                       ),
                     ),
                   ),
-                  if (widget.isMoveToVault && _isVaultInfoVisible)
+                  if (_hasFixedRecipient && _isVaultInfoVisible)
                     Positioned(
                       left: 16,
                       right: 16,
@@ -608,7 +634,12 @@ class _SendScreenState extends State<SendScreen> with SingleTickerProviderStateM
                           onTapRemove: _hideVaultInfo,
                           richText: RichText(
                             text: TextSpan(
-                              text: t.send_screen.vault_transfer_description,
+                              text:
+                                  _isBoardMode
+                                      ? 'Boards these funds into the Ark balance of $_boardWalletName. The Ark server '
+                                          'takes a fee, and the funds become spendable in Ark once the funding '
+                                          'transaction has enough confirmations.'
+                                      : t.send_screen.vault_transfer_description,
                               style: CoconutTypography.body3_12
                                   .setColor(context.coconutColors.popoverText)
                                   .copyWith(height: 1.3),
@@ -1137,6 +1168,69 @@ class _SendScreenState extends State<SendScreen> with SingleTickerProviderStateM
     );
   }
 
+  /// Board mode: opens the receiving hot wallet's Ark wallet and makes its board funding address
+  /// the (read-only) recipient. Leaves the screen if that isn't possible.
+  Future<void> _prepareBoard() async {
+    final walletId = widget.boardIntoWalletId!;
+    final arkProvider = context.read<ArkProvider>();
+    try {
+      if (!await openArkWalletForSession(context, walletId, userInitiated: true)) {
+        if (mounted) Navigator.pop(context);
+        return;
+      }
+      final funding = await arkProvider.boardFunding(walletId);
+      final terms = await arkProvider.boardTerms(walletId);
+      if (!mounted) return;
+      _viewModel.setArkBoard(ArkBoardIntent(walletId: walletId, funding: funding), terms);
+      setState(() => _boardFunding = funding);
+      _addressControllerList.first.text = funding.address;
+      _viewModel.validateAllFieldsOnFocusLost();
+    } catch (error) {
+      if (!mounted) return;
+      await showInfoDialog(
+        context,
+        context.read<PreferenceProvider>().language,
+        'Ark is unavailable',
+        'Could not prepare the move to Ark: $error',
+      );
+      if (mounted) Navigator.pop(context);
+    }
+  }
+
+  /// What the board delivers into Ark, once the built amount's board fee is known.
+  String? _boardInfoMessage() {
+    final funding = _boardFunding;
+    final terms = _viewModel.arkBoardTerms;
+    if (!_isBoardMode || funding == null || terms == null) return null;
+    final amount = _viewModel.builtAmountTo(funding.address);
+    if (amount == null) return null;
+    _scheduleBoardFeeEstimate(amount);
+    if (_boardFeeAmount != amount || _boardFeeSats == null) return null;
+    final unit = _viewModel.currentUnit;
+    final confirmations = terms.requiredConfirmations;
+    return 'Arrives in Ark: ${unit.displayBitcoinAmount(amount - _boardFeeSats!, withUnit: true)} after '
+        '$confirmations confirmation${confirmations == 1 ? '' : 's'} '
+        '(Ark fee ${unit.displayBitcoinAmount(_boardFeeSats!, withUnit: true, shouldCheckZero: true, defaultWhenZero: '0')})';
+  }
+
+  void _scheduleBoardFeeEstimate(int amount) {
+    if (_boardFeeRequestedFor == amount) return;
+    _boardFeeRequestedFor = amount;
+    _boardFeeTimer?.cancel();
+    _boardFeeTimer = Timer(const Duration(milliseconds: 400), () async {
+      try {
+        final fee = await context.read<ArkProvider>().estimateBoardFee(widget.boardIntoWalletId!, amount);
+        if (!mounted || _boardFeeRequestedFor != amount) return;
+        setState(() {
+          _boardFeeSats = fee;
+          _boardFeeAmount = amount;
+        });
+      } catch (error) {
+        Logger.error('SendScreen: board fee estimate failed: $error');
+      }
+    });
+  }
+
   Widget _buildFinalButton(BuildContext context) {
     return Selector<SendViewModel, (String, bool, bool, int?)>(
       selector: (_, vm) => (vm.finalErrorMessage, vm.isReadyToSend, vm.isFeeRateLowerThanMin, vm.unintendedDustFee),
@@ -1169,6 +1263,12 @@ class _SendScreenState extends State<SendScreen> with SingleTickerProviderStateM
                 textColor: context.coconutColors.primaryText,
                 message: t.send_screen.unintended_dust_fee(unintendedDustFee: unintendedDustFee.toString()),
               ),
+            );
+          }
+          final boardMessage = _boardInfoMessage();
+          if (boardMessage != null) {
+            finalButtonMessages.add(
+              FinalButtonMessage(textColor: context.coconutColors.primaryText, message: boardMessage),
             );
           }
         }
@@ -1211,7 +1311,8 @@ class _SendScreenState extends State<SendScreen> with SingleTickerProviderStateM
                   !_isHotWalletSigning &&
                   !isWalletWithoutMfp(_viewModel.selectedWalletItem) &&
                   isReadyToSend &&
-                  finalErrorMessage.isEmpty,
+                  finalErrorMessage.isEmpty &&
+                  (!_isBoardMode || _viewModel.arkBoard != null),
               text: isHotWallet ? t.sign : t.next,
             ),
           ],
@@ -1737,7 +1838,7 @@ class _SendScreenState extends State<SendScreen> with SingleTickerProviderStateM
               mainAxisAlignment: MainAxisAlignment.end,
               children: [
                 Text(
-                  t.wallet_detail_screen.move_to_vault,
+                  _isBoardMode ? 'Move to Ark · $_boardWalletName' : t.wallet_detail_screen.move_to_vault,
                   style: CoconutTypography.body3_12_Bold.setColor(context.coconutColors.secondaryText),
                 ),
                 const SizedBox(width: 2),
@@ -1794,8 +1895,8 @@ class _SendScreenState extends State<SendScreen> with SingleTickerProviderStateM
 
                     _viewModel.setCurrentPage(index);
                   },
-                  // isMaxMode: 수신자 추가 버튼 안보임
-                  itemCount: recipientListLength + (!isMaxMode ? 1 : 0),
+                  // isMaxMode: 수신자 추가 버튼 안보임. A board has a single recipient.
+                  itemCount: recipientListLength + (!isMaxMode && !_isBoardMode ? 1 : 0),
                   itemBuilder: (context, index) {
                     if (index == recipientListLength) {
                       return _buildAddRecipientCard();
@@ -1854,7 +1955,7 @@ class _SendScreenState extends State<SendScreen> with SingleTickerProviderStateM
         top: 40,
         left: 16,
         right: 16,
-        bottom: widget.isMoveToVault && !_viewModel.isBatchMode ? 5 : 25,
+        bottom: _hasFixedRecipient && !_viewModel.isBatchMode ? 5 : 25,
       ),
       child: ShrinkAnimationButton(
         defaultColor: context.coconutColors.surface,
@@ -2081,6 +2182,15 @@ class _SendScreenState extends State<SendScreen> with SingleTickerProviderStateM
                 builder: (context, data, child) {
                   final isAddressError = data.item2.isError;
                   final controller = _addressControllerList[index];
+                  if (_isBoardMode) {
+                    return VaultReceivingAddressField(
+                      key: index == 0 ? _addressInputFieldKey : null,
+                      address: controller.text,
+                      placeholder: 'Preparing the Ark funding address…',
+                      isError: isAddressError,
+                      onTap: _clearFocus,
+                    );
+                  }
                   if (widget.isMoveToVault) {
                     return VaultReceivingAddressField(
                       key: index == 0 ? _addressInputFieldKey : null,
@@ -2177,7 +2287,7 @@ class _SendScreenState extends State<SendScreen> with SingleTickerProviderStateM
         }
         return Positioned(
           left: 16,
-          top: widget.isMoveToVault ? 4 : null,
+          top: _hasFixedRecipient ? 4 : null,
           child: Container(
             alignment: Alignment.center,
             padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),

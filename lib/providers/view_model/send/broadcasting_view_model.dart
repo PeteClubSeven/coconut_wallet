@@ -2,6 +2,9 @@ import 'dart:collection';
 import 'dart:convert';
 
 import 'package:coconut_lib/coconut_lib.dart';
+import 'package:coconut_wallet/model/ark/ark_board.dart';
+import 'package:coconut_wallet/model/error/app_error.dart';
+import 'package:coconut_wallet/providers/ark_provider.dart';
 import 'package:coconut_wallet/localization/strings.g.dart';
 import 'package:coconut_wallet/enums/wallet_enums.dart';
 import 'package:coconut_wallet/model/utxo/utxo_state.dart';
@@ -72,8 +75,15 @@ class BroadcastingViewModel extends ChangeNotifier {
     this._txProvider,
     this._txDraftRepository,
     this._utxoRepository,
-    this._signedDraftId,
-  );
+    this._signedDraftId, {
+    ArkProvider? arkProvider,
+  }) : _arkProvider = arkProvider;
+
+  final ArkProvider? _arkProvider;
+  bool _isBoardRegistered = false;
+
+  /// Set when this transaction funds a board into an Ark wallet.
+  ArkBoardIntent? get arkBoard => _sendInfoProvider.arkBoard;
 
   List<String> get recipientAddresses => UnmodifiableListView(_recipientAddresses);
 
@@ -102,7 +112,7 @@ class BroadcastingViewModel extends ChangeNotifier {
   bool get isAlreadySaved => isFromSignedDraft || _savedDraftId != null;
   bool get canUseTransactionDrafts {
     final walletId = _walletId ?? _sendInfoProvider.walletId;
-    return walletId != null && !_walletProvider.getWalletById(walletId).hasLocalKey;
+    return walletId != null && !_walletProvider.getWalletById(walletId).hasLocalKey && arkBoard == null;
   }
 
   bool get tagInheritanceFailed => _tagInheritanceFailed;
@@ -169,11 +179,17 @@ class BroadcastingViewModel extends ChangeNotifier {
     }
     _tagInheritanceFailed = false;
     Logger.log('BroadcastingViewModel: signedTx = ${_signedTx!.serialize()}');
+    final board = arkBoard;
+    if (board != null && !_isBoardRegistered) {
+      final registered = await _registerBoard(board);
+      if (registered.isFailure) return registered;
+    }
     final isConnected = await isElectrumServerConnected();
     if (!isConnected) {
       await _nodeProvider.reconnect();
     }
-    final result = await _nodeProvider.broadcast(_signedTx!);
+    var result = await _nodeProvider.broadcast(_signedTx!);
+    if (result.isFailure && board != null) result = await _broadcastBoardFunding(board, result);
     if (result.isFailure) return result;
 
     try {
@@ -191,6 +207,59 @@ class BroadcastingViewModel extends ChangeNotifier {
       Logger.error('Transaction sent, but tag inheritance failed: $e');
     }
     return result;
+  }
+
+  /// Registers the board this transaction funds, before it's broadcast: if the Ark server won't
+  /// cosign, nothing is sent. bark gets the unsigned PSBT, so it leaves the broadcast to us and
+  /// watches for the transaction; the signed one must therefore have the same txid.
+  Future<Result<String>> _registerBoard(ArkBoardIntent board) async {
+    final unsignedPsbt = _sendInfoProvider.txWaitingForSign;
+    final arkProvider = _arkProvider;
+    if (unsignedPsbt == null || arkProvider == null) {
+      return Result.failure(ErrorCodes.broadcastErrorWithMessage('The Ark board is missing its funding PSBT'));
+    }
+    try {
+      final unsignedTxid = Psbt.parse(unsignedPsbt).unsignedTransaction!.transactionHash;
+      if (unsignedTxid != _signedTx!.transactionHash) {
+        return Result.failure(
+          ErrorCodes.broadcastErrorWithMessage('The signed transaction differs from the one to board with'),
+        );
+      }
+      await arkProvider.board(board.walletId, unsignedPsbtBase64: unsignedPsbt, funding: board.funding);
+      _isBoardRegistered = true;
+      return Result.success(unsignedTxid);
+    } catch (error) {
+      Logger.error('BroadcastingViewModel: board registration failed: $error');
+      return Result.failure(ErrorCodes.broadcastErrorWithMessage('The Ark server did not accept the board: $error'));
+    }
+  }
+
+  /// A registered board must get its funding transaction on-chain, or bark keeps it pending
+  /// (and counted in the Ark balance) indefinitely. A failed broadcast is retried, then checked
+  /// against the node (the first attempt may have gone through with its reply lost), then sent
+  /// through bark's chain source.
+  Future<Result<String>> _broadcastBoardFunding(ArkBoardIntent board, Result<String> failure) async {
+    final txid = _signedTx!.transactionHash;
+    Logger.error('BroadcastingViewModel: board funding broadcast failed (${failure.error.message}), retrying');
+    final retried = await _nodeProvider.broadcast(_signedTx!);
+    if (retried.isSuccess) return retried;
+    if ((await _nodeProvider.getTransaction(txid)).isSuccess) return Result.success(txid);
+    if (_arkProvider == null) return retried;
+    try {
+      return Result.success(await _arkProvider.broadcastTx(board.walletId, _signedTx!.serialize()));
+    } catch (error) {
+      if (_isAlreadyOnNetwork(error.toString())) return Result.success(txid);
+      Logger.error('BroadcastingViewModel: broadcasting through bark failed too: $error');
+      return retried;
+    }
+  }
+
+  static bool _isAlreadyOnNetwork(String message) {
+    final lower = message.toLowerCase();
+    return lower.contains('already in utxo set') ||
+        lower.contains('already in block chain') ||
+        lower.contains('txn-already-in-mempool') ||
+        lower.contains('txn-already-known');
   }
 
   Future<bool> isElectrumServerConnected() async {

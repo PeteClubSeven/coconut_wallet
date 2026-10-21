@@ -1,5 +1,6 @@
 import 'package:coconut_lib/coconut_lib.dart';
 import 'package:coconut_wallet/enums/wallet_enums.dart';
+import 'package:coconut_wallet/model/ark/ark_board.dart';
 import 'package:coconut_wallet/screens/wallet_detail/transaction_fee_bumping_screen.dart';
 
 enum SendEntryPoint { home, walletDetail, transactionDetail }
@@ -18,6 +19,7 @@ class SendInfoProvider {
   WalletImportSource? _walletImportSource;
   int? _unsignedDraftId;
   double? _feeRate;
+  ArkBoardIntent? _arkBoard;
 
   int? get walletId => _walletId;
   int? get estimatedFee => _estimatedFee;
@@ -31,6 +33,13 @@ class SendInfoProvider {
   WalletImportSource? get walletImportSource => _walletImportSource;
   int? get unsignedDraftId => _unsignedDraftId;
   double? get feeRate => _feeRate;
+
+  /// Set when the transaction funds a board into an Ark wallet.
+  ArkBoardIntent? get arkBoard => _arkBoard;
+
+  void setArkBoard(ArkBoardIntent? arkBoard) {
+    _arkBoard = arkBoard;
+  }
 
   void setFeeRate(double feeRate) {
     _feeRate = feeRate;
@@ -90,6 +99,7 @@ class SendInfoProvider {
                             _signedResult =
                                 _sendEntryPoint =
                                     _feeBumpingType = _walletImportSource = _unsignedDraftId = _feeRate = null;
+    _arkBoard = null;
   }
 
   Map<String, int>? getRecipientMap() {

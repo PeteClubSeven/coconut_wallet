@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:coconut_wallet/model/ark/ark_balance.dart';
 import 'package:coconut_wallet/model/ark/ark_board.dart';
 import 'package:coconut_wallet/model/ark/ark_lightning_invoice.dart';
+import 'package:coconut_wallet/model/ark/ark_movement.dart';
 import 'package:coconut_wallet/model/ark/ark_snapshot.dart';
 import 'package:coconut_wallet/model/wallet/wallet_item_base.dart';
 import 'package:coconut_wallet/providers/wallet_provider.dart';
@@ -188,6 +189,16 @@ class ArkProvider extends ChangeNotifier {
       if (_syncAgain.remove(walletId)) unawaited(syncNow(walletId, maintenance: false));
     }
   }
+
+  /// Whether [txid] funds a board into one of the hot wallets' Ark wallets. Such a transaction
+  /// must not be replaced (RBF): bark only tracks the txid the board was registered with.
+  bool fundsBoard(String txid) => _walletProvider.walletItemList.any(
+    (wallet) =>
+        snapshot(
+          wallet.id,
+        )?.movements.any((movement) => movement.kind == ArkMovementKind.board && movement.linkedTxid == txid) ??
+        false,
+  );
 
   /// The Ark server's board limits (cached for the session).
   Future<ArkBoardTerms> boardTerms(int walletId) async {
