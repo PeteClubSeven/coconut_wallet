@@ -44,6 +44,8 @@ import 'package:coconut_wallet/providers/connectivity_provider.dart';
 import 'package:coconut_wallet/providers/auth_provider.dart';
 import 'package:coconut_wallet/model/ark/ark_board.dart';
 import 'package:coconut_wallet/providers/ark_provider.dart';
+import 'package:coconut_lib/coconut_lib.dart' show NetworkType;
+import 'package:coconut_wallet/utils/payment_request_parser.dart';
 import 'package:coconut_wallet/screens/ark/ark_unlock_flow.dart';
 import 'package:coconut_wallet/providers/preferences/preference_provider.dart';
 import 'package:coconut_wallet/providers/send_info_provider.dart';
@@ -281,6 +283,7 @@ class _SendScreenState extends State<SendScreen> with SingleTickerProviderStateM
     if (!_hasFixedRecipient && widget.initialBitcoinUri != null && widget.initialBitcoinUri!.isNotEmpty) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (!mounted) return;
+        if (_maybeHandOverToArk(widget.initialBitcoinUri!, 0)) return;
         _applyIncomingBitcoinUri(widget.initialBitcoinUri!, 0);
         _viewModel.updateFeeBoardVisibility();
       });
@@ -2235,7 +2238,7 @@ class _SendScreenState extends State<SendScreen> with SingleTickerProviderStateM
                     onSuffixPressed: () async {
                       _setDropdownMenuVisiblility(false);
                       final String? scannedData = await showAddressScannerBottomSheet(context, title: t.send);
-                      if (scannedData != null) {
+                      if (scannedData != null && !_maybeHandOverToArk(scannedData, index)) {
                         _applyIncomingBitcoinUri(scannedData, index);
                       }
                     },
@@ -2753,6 +2756,45 @@ class _SendScreenState extends State<SendScreen> with SingleTickerProviderStateM
     );
   }
 
+  /// Ark and Lightning payment requests aren't on-chain payments: for a hot wallet with Ark, the
+  /// Pay from Ark screen takes them over. A BIP321 code that also has an on-chain address only
+  /// goes there when the Ark balance covers its amount. Returns whether the input was taken.
+  bool _maybeHandOverToArk(String input, int index) {
+    if (_hasFixedRecipient || index != 0 || _viewModel.isBatchMode || widget.transactionDraftId != null) return false;
+    final request = PaymentRequest.parse(input, NetworkType.currentNetworkType);
+    if (!request.hasArkOrLightning) return false;
+    final wallet = _viewModel.selectedWalletItem;
+    final arkProvider = context.read<ArkProvider>();
+    if (wallet == null || !arkProvider.supportsArk(wallet)) {
+      if (request.bitcoinAddress != null) return false;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        CoconutToast.showToast(
+          context: context,
+          text: 'This is an Ark or Lightning payment: pay it from a hot wallet with Ark.',
+          isVisibleIcon: true,
+        );
+      });
+      return false;
+    }
+    if (request.bitcoinAddress != null) {
+      final spendable = arkProvider.balance(wallet.id)?.spendable ?? 0;
+      final amount = request.amountSats;
+      if (amount == null ? spendable <= 0 : amount > spendable) return false;
+    }
+    _clearFocus();
+    final walletId = wallet.id;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || ModalRoute.of(context)?.isCurrent != true) return;
+      Navigator.pushReplacementNamed(
+        context,
+        AppRouteNames.arkSend,
+        arguments: ArkSendRouteArgs(id: walletId, initialInput: input.trim()),
+      );
+    });
+    return true;
+  }
+
   void _applyIncomingBitcoinUri(String scannedData, int index) {
     if (scannedData.toLowerCase().startsWith('bitcoin:')) {
       final bip21Data = parseBip21Uri(scannedData);
@@ -2867,6 +2909,8 @@ class _SendScreenState extends State<SendScreen> with SingleTickerProviderStateM
         _viewModel.setShowAddressBoard(shouldShowBoard);
         if (!focusNode.hasFocus) {
           if (_hasAddressTextChangedSinceFocus(index, controller.text)) {
+            // A pasted or typed invoice or Ark address: hand it over before it shows as invalid.
+            if (_maybeHandOverToArk(controller.text, index)) return;
             if (controller.text.toLowerCase().startsWith('bitcoin:')) {
               _applyIncomingBitcoinUri(controller.text, index);
             }

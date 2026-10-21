@@ -1,11 +1,14 @@
+import 'package:coconut_lib/coconut_lib.dart' show NetworkType;
 import 'package:coconut_wallet/app/router/app_route_names.dart';
 import 'package:coconut_wallet/app/router/route_args.dart';
 import 'dart:async';
 
 import 'package:coconut_wallet/app/bootstrap/platform_channels.dart';
+import 'package:coconut_wallet/providers/ark_provider.dart';
 import 'package:coconut_wallet/providers/preferences/preference_provider.dart';
 import 'package:coconut_wallet/providers/send_info_provider.dart';
 import 'package:coconut_wallet/providers/wallet_provider.dart';
+import 'package:coconut_wallet/utils/payment_request_parser.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
@@ -65,7 +68,10 @@ class _DeepLinkListenerState extends State<DeepLinkListener> {
     final walletOrder = context.read<PreferenceProvider>().walletOrder;
     final firstWallet = walletProvider.walletItemList.isEmpty ? null : walletProvider.walletItemList.first;
     final targetId =
-        firstWallet == null ? null : walletOrder.firstWhere((id) => id == firstWallet.id, orElse: () => firstWallet.id);
+        _arkWalletFor(bitcoinUri, walletProvider, walletOrder) ??
+        (firstWallet == null
+            ? null
+            : walletOrder.firstWhere((id) => id == firstWallet.id, orElse: () => firstWallet.id));
 
     _isHandlingBitcoinUri = true;
     _recentBitcoinUri = bitcoinUri;
@@ -88,6 +94,23 @@ class _DeepLinkListenerState extends State<DeepLinkListener> {
         _isHandlingBitcoinUri = false;
       }
     });
+  }
+
+  /// A code with `ark=` or `lightning=` goes to the first hot wallet (in the user's order) that
+  /// can pay it from Ark, whose send screen then hands it to Pay from Ark.
+  int? _arkWalletFor(String bitcoinUri, WalletProvider walletProvider, List<int> walletOrder) {
+    if (!PaymentRequest.parse(bitcoinUri, NetworkType.currentNetworkType).hasArkOrLightning) return null;
+    final ArkProvider arkProvider;
+    try {
+      arkProvider = context.read<ArkProvider>();
+    } on ProviderNotFoundException {
+      return null;
+    }
+    final wallets = [
+      for (final id in walletOrder) ...walletProvider.walletItemList.where((wallet) => wallet.id == id),
+      ...walletProvider.walletItemList.where((wallet) => !walletOrder.contains(wallet.id)),
+    ];
+    return wallets.where(arkProvider.supportsArk).firstOrNull?.id;
   }
 
   @override
