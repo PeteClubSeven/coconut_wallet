@@ -15,6 +15,9 @@ easy bark is to integrate.
 - **Milestone 4:** paying from Ark: Ark addresses, Lightning invoices and addresses, BIP321
   codes and plain Bitcoin addresses, from a Pay screen or handed over by Coconut's send screen
   and deep links.
+- **Milestone 5:** one Send for hot wallets with Ark: the recipient first, then every way to pay
+  it (Ark, Lightning, on-chain from the wallet, on-chain via Ark) with its fee, replacing the
+  separate Pay screen.
 
 ## Setup
 
@@ -52,14 +55,22 @@ easy bark is to integrate.
   - **Vault → on-chain** is the vault's own send flow, receiving into the hot wallet.
   - A move is one history entry: the Ark movement carries the on-chain transaction its
     metadata names.
-- **Paying:** "Pay" in the VTXO section opens Pay from Ark, which takes an Ark address, a BOLT11
-  invoice, a Lightning address, a BIP321 code or a Bitcoin address. Coconut parses the string
-  itself (37) and pays a BIP321 code the cheapest way it offers: `sendArkoorPayment`, then
-  `payLightningInvoice(wait: false)` (later syncs finish it), then `sendOnchain`. Each payment
-  shows the server's fee estimate, then asks for confirmation and biometrics/PIN like an on-chain
-  send. Coconut's send screen, and `bitcoin:` deep links with `ark=` or `lightning=`, hand Ark
-  and Lightning requests to it; a code with an on-chain address only goes to Ark when the Ark
-  balance covers it.
+- **Paying:** Send on a hot wallet with Ark (and `bitcoin:` deep links to one) has two steps.
+  1. **Recipient:** an Ark or Bitcoin address, a BOLT11 invoice, a Lightning address or a BIP321
+     code. Coconut parses it itself (37) and says what it is as it's typed.
+  2. **Amount and Pay with:** the amount (locked when the invoice or code carries one), what's
+     available on-chain and in Ark, and one card per way to pay it with its fee. Until the user
+     picks one, the cheapest is selected.
+     - **Ark-funded cards:** `sendArkoorPayment`, `payLightningInvoice(wait: false)` (later
+       syncs finish it), `payLightningAddress` and `sendOnchain`. Each is paid after a
+       confirmation and biometrics/PIN.
+     - **The on-chain card** builds the transaction from the wallet's UTXOs, with UTXO
+       selection, fee rate, Max and extra recipients, then goes to Coconut's confirm screen to
+       sign and broadcast.
+     - **Extra recipients** rule out the Ark cards: offboards and `sendOnchain` take one address.
+
+  Vaults and watch-only wallets keep Coconut's send screen. An Ark or Lightning code typed into
+  that screen on a hot wallet goes back to step 1, along with the amount typed there.
 - **Unlocking:** bark keeps the seed for as long as a wallet is open. The first time a hot
   wallet is entered after launch, Coconut asks once (biometrics or PIN, plus the passphrase for
   "enter passphrase when signing" wallets) and keeps its Ark wallet open for the rest of the
@@ -375,6 +386,21 @@ other side):
 | Bitcoin address from Ark, 20,000 sats | `sendOnchain`: fee 2,530 sats, 22,530 sats left Ark |
 | Deep link `bitcoin:?amount=0.00004&ark=…` | First opened the first wallet's send screen (a watch-only wallet, with no address). It now opens Wallet 1's and goes on to Pay from Ark with the amount and address; the fee shows once the session is open. Without an amount the screen asks for one |
 
+Milestone 5 (the two-step Send), same setup:
+
+| Scenario | Result |
+|---|---|
+| Bitcoin address | Detected as typed. Page 2 shows 0.1177 BTC on-chain (the 0.5 BTC UTXO is locked) and 0.2497 BTC in Ark. At 0.0002 BTC: On-chain ≈ 141 sats (preselected), On-chain via Ark 2,470 sats |
+| On-chain card | 5 sat/vB from the fee sheet: fee 704 sats. Two hand-picked UTXOs (0.0167 BTC): fee 1,044 sats. Max: 0.01669111 BTC (no change, 889 sats). A second recipient of 0.003 BTC left the first 0.01368956 BTC and turned On-chain via Ark to "Ark pays one destination". The confirm screen listed both outputs; signed, broadcast, back on the wallet screen |
+| Lightning invoice, 11,000 sats | "Set by the invoice", only Lightning, fee 22 sats; paid and claimed by the CLI: "Sent · Lightning · successful". Back returns to the wallet screen |
+| `bark bip321 --all`, 9,000 sats, as a deep link | Opened on page 2 with all four cards: Ark 0, Lightning 20, On-chain ≈ 153, On-chain via Ark 2,568 sats. Ark was preselected and paid. Back returns home |
+| Locked Ark (Wallet 3, unlock cancelled) | No prompt on page 2 for a Bitcoin address. On-chain via Ark shows "Ark is locked" with Unlock, and On-chain works |
+| Vault | Its Send still opens Coconut's send screen |
+
+Not checked on the device: the hand-back from Coconut's send screen (its UTXO-list entry wasn't
+reachable in the time) and an Ark address on its own (Ark was paid through the BIP321 code).
+The first build hid the Next/Pay button behind the keyboard; it now sits above it.
+
 Not checked on the device: Lightning addresses (the stack has no LNURL server), BOLT12 and
 LNURL (reported as unsupported), and an amountless invoice.
 
@@ -390,8 +416,12 @@ broadcast, nothing sent when refused, retry and fallbacks, a transaction already
 network), the Move sheet's pairs, and pairing moves in the history. Milestone 4 adds 18: the
 payment request parser (invoice amounts, networks, Ark and Lightning addresses, BIP321 with
 encoded values, address parameters and `req-` parameters, unsupported kinds), payments by rail
-with their movement, the stale-tip retry, and parked on-chain payments. The full suite matches
-the upstream v0.20.0 baseline (the same 10 pre-existing failures).
+with their movement, the stale-tip retry, and parked on-chain payments. Milestone 5 adds 11 for
+the payment options: options per request kind, fixed vs entered amounts, balances with picked
+UTXOs, the on-chain fee following the amount, UTXOs and fee rate, Max with several recipients,
+on-chain-only extra recipients, the reasons an option can't be used, the cheapest default, stale
+Ark estimates, and the hand-off to the confirm screen. The full suite matches the upstream
+v0.20.0 baseline (the same 10 pre-existing failures).
 
 ## Known PoC limitations
 
@@ -399,6 +429,8 @@ the upstream v0.20.0 baseline (the same 10 pre-existing failures).
 - A Lightning payment that fails after starting disappears from the history (failed movements
   with no balance change are hidden). The detail screen it opened shows "failed" while open.
 - Deep links with Ark or Lightning go to the first hot wallet with Ark; there's no wallet picker.
+- Max is on-chain only (bark's fee depends on the amount), and the fee-from-amount switch is only
+  in Coconut's send screen.
 - Vault → Ark and Vault → On-chain were driven on the emulator only up to Coconut Vault's QR.
 - After an upgrade, a hot wallet shows its on-chain balance only until its Ark wallet has been
   unlocked once; afterwards locked wallets show the last synced Ark data.
