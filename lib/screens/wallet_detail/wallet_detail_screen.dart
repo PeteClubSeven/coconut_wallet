@@ -588,21 +588,6 @@ class _WalletDetailScreenState extends State<WalletDetailScreen> with TickerProv
                           ),
                     ),
                   ),
-                  Expanded(
-                    child: _UtxoAction(
-                      iconPath: FeatureTransactionIconPath.txSent,
-                      label: 'Pay',
-                      description: 'Ark or Lightning',
-                      iconPadding: const EdgeInsets.all(2),
-                      isEnabled: (arkProvider.balance(widget.id)?.spendable ?? 0) > 0,
-                      onTap:
-                          () => Navigator.pushNamed(
-                            context,
-                            AppRouteNames.arkSend,
-                            arguments: ArkSendRouteArgs(id: widget.id),
-                          ),
-                    ),
-                  ),
                 ],
               ),
             ),

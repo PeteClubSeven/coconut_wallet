@@ -37,12 +37,6 @@ class ArkWalletRouteArgs {
   const ArkWalletRouteArgs({required this.id, this.startRefresh = false});
 }
 
-class ArkSendRouteArgs {
-  final int id;
-  final String? initialInput;
-  const ArkSendRouteArgs({required this.id, this.initialInput});
-}
-
 class SendRecipientRouteArgs {
   final int id;
   final SendEntryPoint sendEntryPoint;

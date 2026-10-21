@@ -2756,9 +2756,10 @@ class _SendScreenState extends State<SendScreen> with SingleTickerProviderStateM
     );
   }
 
-  /// Ark and Lightning payment requests aren't on-chain payments: for a hot wallet with Ark, the
-  /// Pay from Ark screen takes them over. A BIP321 code that also has an on-chain address only
-  /// goes there when the Ark balance covers its amount. Returns whether the input was taken.
+  /// Ark and Lightning payment requests aren't on-chain payments: for a hot wallet with Ark, Send's
+  /// recipient step takes them back, with the amount typed here when the request has none. A
+  /// BIP321 code that also has an on-chain address stays here while UTXOs are picked by hand.
+  /// Returns whether the input was taken.
   bool _maybeHandOverToArk(String input, int index) {
     if (_hasFixedRecipient || index != 0 || _viewModel.isBatchMode || widget.transactionDraftId != null) return false;
     final request = PaymentRequest.parse(input, NetworkType.currentNetworkType);
@@ -2777,19 +2778,22 @@ class _SendScreenState extends State<SendScreen> with SingleTickerProviderStateM
       });
       return false;
     }
-    if (request.bitcoinAddress != null) {
-      final spendable = arkProvider.balance(wallet.id)?.spendable ?? 0;
-      final amount = request.amountSats;
-      if (amount == null ? spendable <= 0 : amount > spendable) return false;
-    }
+    if (request.bitcoinAddress != null && !_viewModel.isUtxoSelectionAuto) return false;
+    final typed = _viewModel.recipientList.isEmpty ? null : double.tryParse(_viewModel.recipientList[0].amount);
+    final typedSats = typed == null || typed <= 0 ? null : _viewModel.currentUnit.toSatoshi(typed);
     _clearFocus();
     final walletId = wallet.id;
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted || ModalRoute.of(context)?.isCurrent != true) return;
       Navigator.pushReplacementNamed(
         context,
-        AppRouteNames.arkSend,
-        arguments: ArkSendRouteArgs(id: walletId, initialInput: input.trim()),
+        AppRouteNames.sendRecipient,
+        arguments: SendRecipientRouteArgs(
+          id: walletId,
+          sendEntryPoint: widget.sendEntryPoint,
+          initialInput: input.trim(),
+          initialAmountSats: request.amountSats == null ? typedSats : null,
+        ),
       );
     });
     return true;
