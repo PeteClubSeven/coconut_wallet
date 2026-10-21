@@ -443,8 +443,15 @@ v0.20.0 baseline (the same 10 pre-existing failures).
 ### UI
 
 The Ark screens are built from Coconut's own widgets and mirror their closest upstream screen:
-- **Send's two steps:** the send screen and the confirm screen.
-- **VTXO overview:** the UTXO list.
+- **Send, step 1 (recipients):** the send screen itself. It has the same app bar, swipe pages,
+  keypad amount, address field, counter and tooltips. A visible "+ Add recipient" pill adds a
+  page; upstream only has a swipe to a hidden last page.
+- **Send, step 2 ("Pay with"):** the confirm screen.
+- **VTXO overview:** the UTXO overview. It has the same collapsing header with the Ark balance and
+  the Overview / List control. VTXOs show as coins in bucket rows, grouped by amount (the UTXO
+  tiers) or by expiry (expired, a day, a week, 30 days, later), above a bar chart.
+  Balance details, recovery and Refresh VTXOs are in a header menu. Recovery is on the page only
+  when it failed.
 - **Movement detail:** the transaction detail.
 - **Ark → on-chain:** UTXO merge.
 - **Move sheet:** Coconut's selectable sheets.
@@ -453,6 +460,11 @@ The building blocks are `CoconutTextField`, `CoconutOptionPicker`, `FixedBottomB
 `ShrinkAnimationButton` cards, `UnderlineButtonItemCard`, `CoconutChip` and the SVG icons. The few
 shared Ark pieces are in `lib/widgets/features/ark/`. The logic returns codes (problems, labels),
 and the widgets turn them into slang strings.
+
+The UTXO overview's widgets are tied to `UtxoState`, so the coin stack, coin card, chart and
+bucket row are adapted copies in `lib/widgets/features/ark/vtxo_overview_widgets.dart`. A shared
+"coin" model across UTXOs and VTXOs would remove them. The send screen's keypad rules are in
+`SendViewModel`, so step 1 uses a small port (`SendAmountText`).
 
 ## Known PoC limitations
 
@@ -473,6 +485,7 @@ and the widgets turn them into slang strings.
   vault shows as a plain send in the vault's history.
 - The Ark strings are in an `ark` namespace in every locale file, in English for now (not yet
   translated). The reused passphrase sheet's button says "Sign".
-- "Retry recovery" is also offered on newly created wallets, whose recovery status is "not run";
-  running it is harmless.
+- "Retry recovery" (in the VTXO overview's menu) is also offered on newly created wallets, whose
+  recovery status is "not run"; running it is harmless.
+- Step 1 of send has no address board (own wallets): Move covers those.
 - Android only: iOS hasn't been built with `bark_bitcoin`.
