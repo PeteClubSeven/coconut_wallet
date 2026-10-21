@@ -3,11 +3,12 @@ import 'package:coconut_wallet/model/ark/ark_movement.dart';
 import 'package:coconut_wallet/model/wallet/transaction_record.dart';
 import 'package:coconut_wallet/utils/transaction_util.dart';
 
-/// The network an Ark activity went over.
-enum ArkRail { ark, lightning }
+/// The network an entry went over, shown as a pill in wallets with Ark: on-chain (a transaction,
+/// or an Ark payment to a Bitcoin address), Ark or Lightning.
+enum ArkRail { onchain, ark, lightning }
 
 /// What an Ark activity is, where "sent" or "received" would mislead.
-enum ArkActivityLabel { refresh, movedToArk, movedOnchain, sentOnchain, exit, failed, canceled }
+enum ArkActivityLabel { refresh, movedToArk, movedOnchain, exit, failed, canceled }
 
 /// One entry of a wallet's history: an on-chain transaction or, for hot wallets with Ark, an
 /// Ark movement (an Ark or Lightning payment, a refresh…).
@@ -33,6 +34,9 @@ sealed class WalletActivity {
   bool get isPending;
   TransactionStatus? get status;
   String? get memo;
+
+  /// The network it went over, for the pill wallets with Ark show.
+  ArkRail get rail;
 
   /// Changes whenever the entry would render differently.
   int get contentHash;
@@ -94,6 +98,9 @@ class OnchainActivity extends WalletActivity {
   String? get memo => tx.memo;
 
   @override
+  ArkRail get rail => ArkRail.onchain;
+
+  @override
   int get contentHash => tx.contentHashCode;
 }
 
@@ -142,9 +149,12 @@ class ArkActivity extends WalletActivity {
   @override
   String? get memo => null;
 
-  /// Which network it went over, shown next to the status.
+  /// Which network it went over, shown next to the status. A payment from Ark to a Bitcoin
+  /// address (and an exit) lands on-chain, so it gets the on-chain pill like any transaction.
+  @override
   ArkRail get rail => switch (movement.kind) {
     ArkMovementKind.lightningSend || ArkMovementKind.lightningReceive => ArkRail.lightning,
+    ArkMovementKind.offboard || ArkMovementKind.sendOnchain || ArkMovementKind.exit => ArkRail.onchain,
     _ => ArkRail.ark,
   };
 
@@ -152,9 +162,9 @@ class ArkActivity extends WalletActivity {
   ArkActivityLabel? get label => switch (movement.kind) {
     ArkMovementKind.refresh => ArkActivityLabel.refresh,
     ArkMovementKind.board => ArkActivityLabel.movedToArk,
-    // Without this wallet's transaction, the funds went elsewhere (e.g. to a vault).
-    ArkMovementKind.offboard || ArkMovementKind.sendOnchain =>
-      isMove ? ArkActivityLabel.movedOnchain : ArkActivityLabel.sentOnchain,
+    // Without this wallet's transaction, the funds went elsewhere (a vault, someone else): a
+    // plain send, labelled like one.
+    ArkMovementKind.offboard || ArkMovementKind.sendOnchain => isMove ? ArkActivityLabel.movedOnchain : null,
     ArkMovementKind.exit => ArkActivityLabel.exit,
     _ =>
       movement.status == ArkMovementStatus.failed

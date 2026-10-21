@@ -1617,7 +1617,6 @@ class _WalletHomeScreenState extends State<WalletHomeScreen> with TickerProvider
   }
 
   Widget _buildRecentTransactionCard(int walletId, WalletActivity activity, BitcoinUnit currentUnit) {
-    final arkActivity = activity is ArkActivity ? activity : null;
     final walletName = _viewModel.getWalletById(walletId).name;
     const padding = 20.0;
 
@@ -1689,9 +1688,9 @@ class _WalletHomeScreenState extends State<WalletHomeScreen> with TickerProvider
                         mainAxisSize: MainAxisSize.min,
                         children: [
                           Text(walletName, style: CoconutTypography.body3_12.setColor(walletNameTextColor)),
-                          if (arkActivity != null) ...[
+                          if (context.read<ArkProvider>().supportsArkById(walletId)) ...[
                             CoconutLayout.spacing_100w,
-                            ArkChip(arkRailText(arkActivity.rail)),
+                            ArkChip(arkRailText(activity.rail)),
                           ],
                         ],
                       ),

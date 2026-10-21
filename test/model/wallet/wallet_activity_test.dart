@@ -163,7 +163,8 @@ void main() {
 
       expect(activity.isMove, isFalse);
       expect(activity.status, TransactionStatus.sent);
-      expect(activity.label, ArkActivityLabel.sentOnchain);
+      expect(activity.label, isNull);
+      expect(activity.rail, ArkRail.onchain);
       expect(activity.displayAmount, -50000);
     });
   });

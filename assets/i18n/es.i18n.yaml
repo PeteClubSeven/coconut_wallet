@@ -1904,13 +1904,13 @@ utxo_organizer_screen:
   split: "Dividir"
 ark:
   rail:
+    onchain: "On-chain"
     ark: "Ark"
     lightning: "Lightning"
   activity:
     refresh: "Refresh"
     moved_to_ark: "Moved to Ark"
     moved_onchain: "Moved on-chain"
-    sent_onchain: "Sent on-chain"
     exit: "Exit"
     failed: "Failed"
     canceled: "Canceled"
@@ -2126,7 +2126,7 @@ ark:
     received_toast: "Received $amount over $rail"
   wallet:
     vtxo_count: "VTXO · $count"
-    overview: "Overview"
+    overview: "Ark"
     overview_description: "Balance • VTXOs"
     refresh: "Refresh"
     refresh_description: "Renew VTXOs"

@@ -114,6 +114,7 @@ String? sendOptionProblemText(SendOptionStatus status) {
 }
 
 String arkRailText(ArkRail rail) => switch (rail) {
+  ArkRail.onchain => t.ark.rail.onchain,
   ArkRail.ark => t.ark.rail.ark,
   ArkRail.lightning => t.ark.rail.lightning,
 };
@@ -125,7 +126,6 @@ String? arkActivityLabelText(ArkActivityLabel? label) {
     ArkActivityLabel.refresh => texts.refresh,
     ArkActivityLabel.movedToArk => texts.moved_to_ark,
     ArkActivityLabel.movedOnchain => texts.moved_onchain,
-    ArkActivityLabel.sentOnchain => texts.sent_onchain,
     ArkActivityLabel.exit => texts.exit,
     ArkActivityLabel.failed => texts.failed,
     ArkActivityLabel.canceled => texts.canceled,

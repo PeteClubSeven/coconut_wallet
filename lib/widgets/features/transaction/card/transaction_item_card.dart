@@ -4,6 +4,7 @@ import 'package:coconut_wallet/enums/fiat_enums.dart';
 import 'package:coconut_wallet/enums/transaction_enums.dart';
 import 'package:coconut_wallet/localization/strings.g.dart';
 import 'package:coconut_wallet/model/wallet/wallet_activity.dart';
+import 'package:coconut_wallet/providers/ark_provider.dart';
 import 'package:coconut_wallet/utils/datetime_util.dart';
 import 'package:coconut_wallet/utils/text_utils.dart';
 import 'package:coconut_wallet/utils/transaction_util.dart';
@@ -11,6 +12,7 @@ import 'package:coconut_wallet/widgets/common/buttons/shrink_animation_button.da
 import 'package:coconut_wallet/widgets/common/icon/transaction_status_gradient_mask.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_svg/svg.dart';
+import 'package:provider/provider.dart';
 import 'package:coconut_wallet/constants/icon_path.dart';
 import 'package:coconut_wallet/widgets/features/ark/ark_texts.dart';
 import 'package:coconut_wallet/widgets/features/ark/ark_ui.dart';
@@ -100,7 +102,11 @@ class TransactionItemCard extends StatelessWidget {
         icon,
         CoconutLayout.spacing_200w,
         Text(statusString, style: CoconutTypography.body2_14.setColor(context.coconutColors.primaryText)),
-        if (_arkActivity != null) ...[CoconutLayout.spacing_200w, ArkChip(arkRailText(_arkActivity!.rail))],
+        // Wallets with Ark mark every entry with its network; others stay as upstream.
+        if (context.read<ArkProvider>().supportsArkById(id)) ...[
+          CoconutLayout.spacing_200w,
+          ArkChip(arkRailText(activity.rail)),
+        ],
       ],
     );
   }
