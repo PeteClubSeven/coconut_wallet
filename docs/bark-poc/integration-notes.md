@@ -67,19 +67,21 @@ easy bark is to integrate.
        a BIP321 code, with its amount. Coconut parses it itself (37) and says what it is as it's
        typed.
      - The amount locks when the invoice or code carries one (0-sat invoices stay editable).
-     - What's available on-chain and in Ark is shown under the field. Tapping a balance sends
-       all of it: on-chain from the last row, or everything in Ark to a single Bitcoin or Ark
-       address. The on-chain balance can't be tapped for Ark addresses and invoices.
+     - "Send All On-chain" and "Send All Off-chain" pills under the amount, as upstream's single
+       Send All (it becomes "Cancel …" while on, and the other switches over): on-chain from the
+       last row, or everything off-chain (in Ark) to a single Bitcoin or Ark address. The
+       on-chain one is dimmed for Ark addresses and invoices. A send shows no balances; a move
+       shows its source's.
      - More recipients: swipe to the dashed card, as upstream (with its first-run hint).
      - Several recipients need Bitcoin addresses: offboards and `sendOnchain` take one, so
        several are paid on-chain in one transaction.
-  2. **Pay with:** one card per way to pay, with its fee. Until the user picks one, the cheapest
-     is selected.
+  2. **Send with** (titled with the wallet's name): one card per way to send, with its balance
+     and fee. Until the user picks one, the cheapest is selected.
      - **Ark-funded cards** (one recipient only): `sendArkoorPayment`,
        `payLightningInvoice(wait: false)` (later syncs finish it), `payLightningAddress` and
-       `sendOnchain` (`offboardAll` for everything). Each is paid after biometrics/PIN, with no
+       `sendOnchain` (`offboardAll` for everything). Each is sent after biometrics/PIN, with no
        confirmation pop-up, on a progress screen built from the broadcast screens: "Transaction
-       Sent", or "Payment pending" when it takes more than 5 s.
+       Sent", or "Transaction pending" when it takes more than 5 s.
      - **The on-chain card** has the send screen's controls (a UTXOs pill opening the selection
        sheet, the fee rate with the recommended rates, the estimated fee, fee subtracted from
        the amount), then goes to Coconut's confirm screen to sign and broadcast.
@@ -103,7 +105,10 @@ easy bark is to integrate.
   address>&lightning=<invoice>`, with one copy row per method. "VTXO · N" sits next to the UTXO
   section. Ark movements are merged into the recent list, the full list and the home carousel
   through a `WalletActivity` type in view models; sync and RBF/CPFP code still see only on-chain
-  transactions.
+  transactions. "Show Separate Balances" in a wallet's settings adds on-chain and off-chain
+  under the wallet screen's total. A payment arriving while the receive screen is open (Ark,
+  Lightning, or on-chain once Coconut's sync sees it) opens a "Received" screen in the
+  "Transaction Sent" layout.
 
 ## Pain points
 
@@ -480,13 +485,12 @@ against the public regtest server).
 The Ark screens are built from Coconut's own widgets and mirror their closest upstream screen:
 - **Send, step 1 (recipients):** the send screen itself. It has the same app bar, swipe pages
   (and first-run swipe hint), dashed add card, keypad amount, address field, counter and
-  tooltips. The on-chain and Ark balances sit under the field, where upstream's app bar has its
-  UTXO pill, and double as its Send All. Move uses the same screen with the destination in a
-  card like step 2's.
-- **Send, step 2 ("Pay with"):** the confirm screen. The on-chain card carries the send screen's
+  tooltips, with two of its Send All pills (on-chain and off-chain). Move uses the same screen
+  with the destination in a card like step 2's and the source's balance.
+- **Send, step 2 ("Send with"):** the confirm screen. The on-chain card carries the send screen's
   UTXO pill, fee board and recommended-rate keypad bar.
-- **Paying from Ark:** the broadcasting and broadcast-complete screens (their Lottie and layout),
-  with a pending state.
+- **Sending from Ark:** the broadcasting and broadcast-complete screens (their Lottie and
+  layout), with a pending state. **Received** is the broadcast-complete screen with the amount.
 - **VTXO overview:** the UTXO overview. It has the same collapsing header with the Ark balance and
   the Overview / List control. VTXOs show as coins in bucket rows, grouped by amount (the UTXO
   tiers) or by expiry (expired, a day, a week, 30 days, later), above a bar chart.
