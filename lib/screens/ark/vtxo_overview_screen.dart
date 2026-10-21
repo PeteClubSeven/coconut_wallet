@@ -14,7 +14,9 @@ import 'package:coconut_wallet/providers/node_provider/node_provider.dart';
 import 'package:coconut_wallet/providers/preferences/preference_provider.dart';
 import 'package:coconut_wallet/providers/price_provider.dart';
 import 'package:coconut_wallet/providers/wallet_provider.dart';
+import 'package:coconut_wallet/app/router/route_args.dart';
 import 'package:coconut_wallet/screens/ark/ark_unlock_flow.dart';
+import 'package:coconut_wallet/screens/ark/vtxo_refresh_flow.dart';
 import 'package:coconut_wallet/screens/wallet_detail/utxo_overview/utxo_bucket_scroll_rail.dart';
 import 'package:coconut_wallet/screens/wallet_detail/utxo_overview/utxo_overview_filter_widgets.dart';
 import 'package:coconut_wallet/screens/wallet_detail/utxo_overview/utxo_overview_header.dart';
@@ -22,7 +24,6 @@ import 'package:coconut_wallet/services/model/response/block_timestamp.dart';
 import 'package:coconut_wallet/ui/coconut/coconut_overlays.dart';
 import 'package:coconut_wallet/utils/datetime_util.dart';
 import 'package:coconut_wallet/utils/utxo_amount_format_util.dart';
-import 'package:coconut_wallet/widgets/common/buttons/copy_text_container.dart';
 import 'package:coconut_wallet/widgets/common/buttons/fixed_bottom_button.dart';
 import 'package:coconut_wallet/widgets/common/buttons/fixed_bottom_tween_button.dart';
 import 'package:coconut_wallet/widgets/common/buttons/shrink_animation_button.dart';
@@ -142,24 +143,15 @@ class _VtxoOverviewScreenState extends State<VtxoOverviewScreen> {
   });
 
   Future<void> _confirmRefresh() async {
-    final ids = _selectedIds.toList();
-    if (ids.isEmpty) return;
     setState(() => _isRefreshing = true);
     try {
-      final fee = await _arkProvider.estimateRefreshFee(widget.id, ids);
-      if (!mounted) return;
-      final confirmed = await confirmArkAction(
+      final scheduled = await refreshVtxosWithConfirmation(
         context,
-        title: t.ark.vtxo.refresh_title(count: ids.length),
-        description: t.ark.vtxo.refresh_description(fee: formatSats(_unit, fee)),
+        walletId: widget.id,
+        ids: _selectedIds.toList(),
+        unit: _unit,
       );
-      if (!confirmed || !mounted) return;
-      await _arkProvider.refreshDelegated(widget.id, ids);
-      if (!mounted) return;
-      _stopSelecting();
-      _toast(t.ark.vtxo.refresh_scheduled);
-    } catch (error) {
-      if (mounted) _toast(t.ark.vtxo.refresh_failed(error: '$error'));
+      if (scheduled && mounted) _stopSelecting();
     } finally {
       if (mounted) setState(() => _isRefreshing = false);
     }
@@ -616,7 +608,7 @@ class _VtxoOverviewScreenState extends State<VtxoOverviewScreen> {
                         colorOf:
                             (vtxo) =>
                                 _isByAmount ? tierTheme.colorForSats(vtxo.amountSats, dustThreshold: 0) : bucket.color,
-                        onTapVtxo: (vtxo) => _showVtxoDetails(vtxo, tipHeight),
+                        onTapVtxo: _openVtxo,
                       ),
                     );
                   },
@@ -679,7 +671,7 @@ class _VtxoOverviewScreenState extends State<VtxoOverviewScreen> {
       child: ShrinkAnimationButton(
         onPressed: () {
           if (!_isSelecting) {
-            _showVtxoDetails(vtxo, tipHeight);
+            _openVtxo(vtxo);
           } else if (!vtxo.isLocked) {
             setState(() => isSelected ? _selectedIds.remove(vtxo.id) : _selectedIds.add(vtxo.id));
           }
@@ -760,48 +752,8 @@ class _VtxoOverviewScreenState extends State<VtxoOverviewScreen> {
     );
   }
 
-  void _showVtxoDetails(ArkVtxo vtxo, int? tipHeight) {
-    final colors = context.coconutColors;
-    TextStyle valueStyle() => CoconutTypography.body2_14_Number.setColor(colors.primaryText);
-    CommonBottomSheets.showBottomSheet(
-      context: context,
-      title: t.ark.vtxo.detail_title,
-      screenName: '${AppRouteNames.arkWallet}/vtxo',
-      showCloseButton: true,
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(16, 0, 16, 32),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            CopyTextContainer(text: vtxo.id, textStyle: valueStyle()),
-            CoconutLayout.spacing_500h,
-            UnderlineButtonItemCard(
-              label: t.ark.vtxo.amount,
-              child: Text(formatSats(_unit, vtxo.amountSats), style: valueStyle()),
-            ),
-            UnderlineButtonItemCard(
-              label: t.ark.vtxo.expiry,
-              child: Text(
-                '${t.ark.vtxo.at_block(height: vtxo.expiryHeight)} · ${_blocks(vtxo.expiryHeight, tipHeight)}',
-                style: valueStyle(),
-              ),
-            ),
-            UnderlineButtonItemCard(
-              label: t.ark.vtxo.state,
-              child: Text(vtxo.isLocked ? t.ark.vtxo.state_locked : t.ark.vtxo.spendable, style: valueStyle()),
-            ),
-            UnderlineButtonItemCard(label: t.ark.vtxo.kind, child: Text(vtxo.kind, style: valueStyle())),
-            UnderlineButtonItemCard(
-              label: t.ark.vtxo.exit_depth,
-              showDivider: false,
-              child: Text('${vtxo.exitDepth}', style: valueStyle()),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
+  void _openVtxo(ArkVtxo vtxo) =>
+      Navigator.pushNamed(context, AppRouteNames.vtxoDetail, arguments: VtxoDetailRouteArgs(id: widget.id, vtxo: vtxo));
 
   static String _blocks(int height, int? tipHeight) {
     if (tipHeight == null) return t.ark.vtxo.at_block(height: height);

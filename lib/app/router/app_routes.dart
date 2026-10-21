@@ -44,6 +44,7 @@ import 'package:coconut_wallet/screens/wallet_detail/utxo_list_screen.dart';
 import 'package:coconut_wallet/screens/wallet_detail/utxo_merge/utxo_merge_screen.dart';
 import 'package:coconut_wallet/screens/ark/ark_movement_detail_screen.dart';
 import 'package:coconut_wallet/screens/ark/ark_to_onchain_screen.dart';
+import 'package:coconut_wallet/screens/ark/vtxo_detail_screen.dart';
 import 'package:coconut_wallet/screens/ark/vtxo_overview_screen.dart';
 import 'package:coconut_wallet/screens/wallet_detail/utxo_organizer_screen.dart';
 import 'package:coconut_wallet/screens/wallet_detail/utxo_overview/utxo_overview_screen.dart';
@@ -170,6 +171,11 @@ Map<String, WidgetBuilder> buildAppRoutes() {
         (context) => _buildLoadingScreenWithArgs<ArkWalletRouteArgs>(
           context,
           (args) => VtxoOverviewScreen(id: args.id, startRefresh: args.startRefresh),
+        ),
+    AppRouteNames.vtxoDetail:
+        (context) => _buildLoadingScreenWithArgs<VtxoDetailRouteArgs>(
+          context,
+          (args) => VtxoDetailScreen(id: args.id, vtxo: args.vtxo),
         ),
     AppRouteNames.arkToOnchain:
         (context) => _buildLoadingScreenWithArgs<ArkToOnchainRouteArgs>(

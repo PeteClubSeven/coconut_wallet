@@ -44,6 +44,7 @@ class AppRouteNames {
   static const String utxoOverview = '/utxo-overview';
   static const String utxoOrganizer = '/utxo-organizer';
   static const String arkWallet = '/ark-wallet';
+  static const String vtxoDetail = '/vtxo-detail';
   static const String arkMovementDetail = '/ark-movement-detail';
   static const String arkToOnchain = '/ark-to-onchain';
   static const String sendRecipient = '/send-recipient';

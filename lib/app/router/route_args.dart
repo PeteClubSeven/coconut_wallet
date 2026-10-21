@@ -3,6 +3,7 @@ import 'dart:typed_data';
 import 'package:coconut_wallet/enums/fiat_enums.dart';
 import 'package:coconut_wallet/enums/wallet_enums.dart';
 import 'package:coconut_wallet/model/utxo/utxo_state.dart';
+import 'package:coconut_wallet/model/ark/ark_vtxo.dart';
 import 'package:coconut_wallet/model/wallet/transaction_record.dart';
 import 'package:coconut_wallet/providers/send_info_provider.dart';
 import 'package:coconut_wallet/screens/wallet_detail/transaction_fee_bumping_screen.dart';
@@ -35,6 +36,12 @@ class ArkWalletRouteArgs {
   /// Open the VTXO page in refresh mode.
   final bool startRefresh;
   const ArkWalletRouteArgs({required this.id, this.startRefresh = false});
+}
+
+class VtxoDetailRouteArgs {
+  final int id;
+  final ArkVtxo vtxo;
+  const VtxoDetailRouteArgs({required this.id, required this.vtxo});
 }
 
 class SendRecipientRouteArgs {
