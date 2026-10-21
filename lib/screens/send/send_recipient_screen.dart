@@ -1,32 +1,40 @@
-import 'package:coconut_design_system/coconut_design_system.dart' hide CoconutAppBar;
+import 'package:coconut_design_system/coconut_design_system.dart'
+    hide CoconutAppBar, CoconutTextField, CoconutTextFieldStyle;
 import 'package:coconut_lib/coconut_lib.dart';
 import 'package:coconut_wallet/app/router/app_route_names.dart';
 import 'package:coconut_wallet/app/router/route_args.dart';
 import 'package:coconut_wallet/config/number_format_config.dart';
+import 'package:coconut_wallet/constants/icon_path.dart';
 import 'package:coconut_wallet/design_system/context/coconut_theme_context_extension.dart';
 import 'package:coconut_wallet/enums/fiat_enums.dart';
+import 'package:coconut_wallet/extensions/string_extensions.dart';
 import 'package:coconut_wallet/localization/strings.g.dart';
 import 'package:coconut_wallet/model/utxo/utxo_state.dart';
 import 'package:coconut_wallet/providers/ark_provider.dart';
 import 'package:coconut_wallet/providers/preferences/preference_provider.dart';
 import 'package:coconut_wallet/providers/send_info_provider.dart';
 import 'package:coconut_wallet/providers/wallet_provider.dart';
-import 'package:coconut_wallet/widgets/features/ark/ark_texts.dart';
 import 'package:coconut_wallet/ui/coconut/coconut_app_bar.dart';
+import 'package:coconut_wallet/ui/coconut/coconut_text_field.dart';
 import 'package:coconut_wallet/utils/address_scan_util.dart';
 import 'package:coconut_wallet/utils/balance_format_util.dart';
+import 'package:coconut_wallet/utils/dashed_border_painter.dart';
+import 'package:coconut_wallet/utils/numeric_input_formatters.dart';
 import 'package:coconut_wallet/utils/payment_request_parser.dart';
 import 'package:coconut_wallet/utils/send_recipients.dart';
+import 'package:coconut_wallet/widgets/common/buttons/fixed_bottom_button.dart';
+import 'package:coconut_wallet/widgets/common/buttons/shrink_animation_button.dart';
+import 'package:coconut_wallet/widgets/features/ark/ark_texts.dart';
+import 'package:coconut_wallet/widgets/features/ark/ark_ui.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
+import 'package:flutter_svg/flutter_svg.dart';
 import 'package:provider/provider.dart';
 
-/// Step 1 of Send for a hot wallet with Ark: who to pay and how much. Each row takes a
-/// destination (a Bitcoin or Ark address, a Lightning invoice or address, or a BIP321 code) and
-/// its amount, which an invoice or code fills in and locks. "Add recipient" adds rows; several
+/// Step 1 of Send for a hot wallet with Ark: who to pay and how much. Each recipient card takes a
+/// destination (a Bitcoin or Ark address, a Lightning invoice or address, or a BIP321 code) and its
+/// amount, which an invoice or code fills in and locks. "Add recipient" adds cards; several
 /// recipients are paid on-chain in one transaction, so they need Bitcoin addresses. Step 2
-/// ([AppRouteNames.sendOptions]) chooses how to pay. Strings are not localized yet (proof of
-/// concept).
+/// ([AppRouteNames.sendOptions]) chooses how to pay.
 class SendRecipientScreen extends StatefulWidget {
   const SendRecipientScreen({
     super.key,
@@ -50,7 +58,7 @@ class SendRecipientScreen extends StatefulWidget {
   State<SendRecipientScreen> createState() => _SendRecipientScreenState();
 }
 
-/// The fields of one recipient row.
+/// The fields of one recipient card.
 class _RecipientRow {
   final TextEditingController destination = TextEditingController();
   final TextEditingController amount = TextEditingController();
@@ -120,7 +128,7 @@ class _SendRecipientScreenState extends State<SendRecipientScreen> {
   _RecipientRow _addRow() {
     final row = _RecipientRow();
     for (final other in _rows) {
-      other.isMax = false; // Max is only for the last row
+      other.isMax = false; // Send All is only for the last recipient
     }
     row.destination.addListener(() {
       _applyDestination(row);
@@ -161,24 +169,12 @@ class _SendRecipientScreenState extends State<SendRecipientScreen> {
     }
   }
 
-  Future<void> _paste(_RecipientRow row) async {
-    final text = (await Clipboard.getData(Clipboard.kTextPlain))?.text;
-    if (!mounted || text == null || text.trim().isEmpty) return;
-    row.destination.text = text.trim();
-    _afterDestinationEntered(row);
-  }
-
   Future<void> _scan(_RecipientRow row) async {
     FocusScope.of(context).unfocus();
     final scanned = await showAddressScannerBottomSheet(context, title: t.send);
     if (!mounted || scanned == null) return;
     row.destination.text = scanned.trim();
-    _afterDestinationEntered(row);
-  }
-
-  /// After a paste or scan: a single recipient whose amount is known goes straight on; otherwise
-  /// the amount is next.
-  void _afterDestinationEntered(_RecipientRow row) {
+    // A single recipient whose amount is known goes straight on; otherwise the amount is next.
     if (_rows.length == 1 && row.amountLocked && _check().canContinue) {
       _next();
     } else if (!row.amountLocked) {
@@ -194,17 +190,15 @@ class _SendRecipientScreenState extends State<SendRecipientScreen> {
   // --- Amounts ---
 
   String _amountText(int sats) {
-    if (_unit.isBasedOnSatoshi) return '$sats';
+    if (_unit.isBasedOnSatoshi) {
+      return formatIntWithGroupingSeparator('$sats', NumberFormatConfig.instance.groupingSeparator);
+    }
     return UnitUtil.convertSatoshiToBitcoinString(sats).replaceAll('.', NumberFormatConfig.instance.decimalSeparator);
   }
 
   int? _parseAmount(String text) {
-    final normalized = normalizeNumTextForNumParsing(text.trim());
-    if (normalized.isEmpty) return null;
-    final value = double.tryParse(normalized);
+    final value = text.trim().toDoubleSafe();
     if (value == null || value <= 0) return null;
-    final decimals = normalized.contains('.') ? normalized.split('.').last.length : 0;
-    if (_unit.isBasedOnSatoshi ? decimals > 0 : decimals > 8) return null;
     return _unit.toSatoshi(value);
   }
 
@@ -258,238 +252,221 @@ class _SendRecipientScreenState extends State<SendRecipientScreen> {
     final check = _check(arkAvailableSats: arkAvailable);
     return Scaffold(
       backgroundColor: colors.background,
+      resizeToAvoidBottomInset: false,
       appBar: CoconutAppBar.build(
         context: context,
-        title: '${t.send} · $_walletName',
+        title: _walletName,
+        isBottom: true,
         backgroundColor: colors.background,
       ),
       body: SafeArea(
-        child: ListView(
-          padding: const EdgeInsets.fromLTRB(16, 8, 16, 120),
+        child: Stack(
           children: [
-            Text(
-              _rows.length == 1 ? 'Who are you paying?' : 'Recipients',
-              style: CoconutTypography.body2_14_Bold.setColor(colors.primaryText),
+            ListView(
+              padding: EdgeInsets.fromLTRB(16, 8, 16, 160 + MediaQuery.viewInsetsOf(context).bottom),
+              children: [
+                for (var i = 0; i < _rows.length; i++) ...[
+                  _buildRecipientCard(i, check.checks[i], isLast: i == _rows.length - 1),
+                  CoconutLayout.spacing_300h,
+                ],
+                _buildAddRecipient(),
+                CoconutLayout.spacing_500h,
+                _buildAvailable(arkAvailable),
+              ],
             ),
-            CoconutLayout.spacing_200h,
-            for (var i = 0; i < _rows.length; i++) ...[
-              _buildRow(i, check.checks[i], isLast: i == _rows.length - 1),
-              CoconutLayout.spacing_200h,
-            ],
-            Align(
-              alignment: Alignment.centerLeft,
-              child: TextButton.icon(
-                onPressed: _addRecipient,
-                icon: Icon(Icons.add, size: 18, color: colors.iconPrimary),
-                label: Text('Add recipient', style: CoconutTypography.body2_14.setColor(colors.primaryText)),
-              ),
-            ),
-            CoconutLayout.spacing_200h,
-            _buildAvailable(arkAvailable),
-            if (check.exceedsAvailable) ...[
-              CoconutLayout.spacing_200h,
-              Text(
-                t.ark.recipient_problem.more_than_available,
-                style: CoconutTypography.body3_12.setColor(colors.danger),
-              ),
-            ],
-          ],
-        ),
-      ),
-      bottomNavigationBar: Padding(
-        // Rides above the keyboard, which a bottom bar otherwise sits behind.
-        padding: EdgeInsets.only(bottom: MediaQuery.viewInsetsOf(context).bottom),
-        child: SafeArea(
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
-            child: CoconutButton(
+            FixedBottomButton(
+              onButtonClicked: _next,
               text: t.next,
               isActive: check.canContinue,
-              onPressed: check.canContinue ? _next : () {},
-              height: 52,
-              backgroundColor: colors.primary,
-              foregroundColor: colors.background,
+              subWidget:
+                  check.exceedsAvailable
+                      ? Text(
+                        t.ark.recipient_problem.more_than_available,
+                        style: CoconutTypography.body3_12.setColor(colors.danger),
+                      )
+                      : null,
             ),
-          ),
+          ],
         ),
       ),
     );
   }
 
-  Widget _buildRow(int index, SendRecipientCheck check, {required bool isLast}) {
+  Widget _buildRecipientCard(int index, SendRecipientCheck check, {required bool isLast}) {
     final colors = context.coconutColors;
     final row = _rows[index];
     final request = check.request;
     // "Enter an amount" is what the empty amount field already says.
     final problem = check.problem == SendRecipientProblem.needsAmount ? null : recipientProblemText(check);
-    return Container(
-      padding: const EdgeInsets.fromLTRB(16, 4, 4, 12),
-      decoration: BoxDecoration(color: colors.surface, borderRadius: BorderRadius.circular(CoconutStyles.radius_300)),
+    return ArkCard(
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          Row(
-            children: [
-              Expanded(
-                child: TextField(
-                  controller: row.destination,
-                  focusNode: row.destinationFocus,
-                  // Addresses and invoices must come through exactly as typed or pasted.
-                  autocorrect: false,
-                  enableSuggestions: false,
-                  keyboardType: TextInputType.visiblePassword,
-                  textInputAction: TextInputAction.next,
-                  onSubmitted: (_) {
-                    if (!row.amountLocked) row.amountFocus.requestFocus();
-                  },
-                  maxLines: 3,
-                  minLines: 1,
-                  style: CoconutTypography.body2_14.setColor(colors.primaryText),
-                  decoration: InputDecoration(
-                    border: InputBorder.none,
-                    hintText:
-                        _rows.length == 1
-                            ? 'Bitcoin or Ark address, Lightning invoice or address, or payment code'
-                            : 'Bitcoin address',
-                    hintMaxLines: 2,
-                    hintStyle: CoconutTypography.body2_14.setColor(colors.tertiaryText),
+          if (_rows.length > 1) ...[
+            Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    t.ark.send.recipient_n(n: index + 1),
+                    style: CoconutTypography.body3_12_Bold.setColor(colors.secondaryText),
                   ),
                 ),
-              ),
-              IconButton(
-                onPressed: () => _paste(row),
-                icon: Icon(Icons.content_paste, color: colors.iconPrimary, size: 20),
-              ),
-              IconButton(
-                onPressed: () => _scan(row),
-                icon: Icon(Icons.qr_code_scanner, color: colors.iconPrimary, size: 20),
-              ),
-              if (_rows.length > 1)
-                IconButton(
-                  onPressed: () => _removeRow(row),
-                  icon: Icon(Icons.close, color: colors.iconPrimary, size: 20),
+                GestureDetector(
+                  behavior: HitTestBehavior.opaque,
+                  onTap: () => _removeRow(row),
+                  child: Padding(
+                    padding: const EdgeInsets.all(4),
+                    child: SvgPicture.asset(
+                      CommonActionIconPath.close,
+                      width: 14,
+                      height: 14,
+                      colorFilter: ColorFilter.mode(colors.iconSecondary, BlendMode.srcIn),
+                    ),
+                  ),
                 ),
-            ],
-          ),
-          if (request != null) ...[
-            Align(alignment: Alignment.centerLeft, child: _chip(describePaymentRequest(request, _unit))),
-            if (problem != null) ...[
-              CoconutLayout.spacing_100h,
-              Padding(
-                padding: const EdgeInsets.only(right: 12),
-                child: Text(problem, style: CoconutTypography.body3_12.setColor(colors.danger)),
-              ),
-            ],
-          ],
-          CoconutLayout.spacing_200h,
-          Divider(height: 1, color: colors.surfaceMuted),
-          Padding(
-            padding: const EdgeInsets.only(top: 4, right: 8),
-            child: Row(
-              children: [
-                Expanded(child: _buildAmountField(row)),
-                if (isLast && check.canUseMax) _choice('Max', selected: row.isMax, onTap: () => _toggleMax(row)),
               ],
             ),
+            CoconutLayout.spacing_200h,
+          ],
+          CoconutTextField(
+            controller: row.destination,
+            focusNode: row.destinationFocus,
+            backgroundColor: colors.surface,
+            padding: const EdgeInsets.only(left: 16, right: 0),
+            onChanged: (_) {},
+            maxLines: 1,
+            // Addresses and invoices must come through exactly as typed or pasted.
+            autocorrect: false,
+            enableSuggestions: false,
+            textInputType: TextInputType.visiblePassword,
+            textInputAction: TextInputAction.next,
+            onEditingComplete: () => row.amountLocked ? row.destinationFocus.unfocus() : row.amountFocus.requestFocus(),
+            clearButtonVisibility: CoconutTextFieldClearButtonVisibility.whenNotEmpty,
+            onClear: row.destination.clear,
+            suffixIconAsset: CommonActionIconPath.scan,
+            suffixIconColor: colors.primaryText,
+            suffixIconSize: 18,
+            onSuffixPressed: () => _scan(row),
+            placeholderText:
+                _rows.length == 1 ? t.ark.send.destination_placeholder : t.ark.send.bitcoin_address_placeholder,
+            isError: problem != null,
           ),
-          if (row.amountLocked)
-            Text(
-              request?.kind == PaymentRequestKind.lightningInvoice ? 'Set by the invoice' : 'Set by the code',
-              style: CoconutTypography.body3_12.setColor(colors.secondaryText),
+          if (request != null) ...[
+            CoconutLayout.spacing_200h,
+            Wrap(children: [ArkChip(describePaymentRequest(request, _unit))]),
+          ],
+          if (problem != null) ...[
+            CoconutLayout.spacing_100h,
+            Text(problem, style: CoconutTypography.body3_12.setColor(colors.danger)),
+          ],
+          CoconutLayout.spacing_300h,
+          _buildAmount(row, request),
+          if (isLast && check.canUseMax) ...[
+            CoconutLayout.spacing_200h,
+            Align(
+              alignment: Alignment.centerLeft,
+              child: SendOptionPill(
+                label: t.send_screen.input_maximum_amount,
+                iconPath: FeatureSettingsIconPath.broom,
+                isSelected: row.isMax,
+                onPressed: () => _toggleMax(row),
+              ),
             ),
+          ],
         ],
       ),
     );
   }
 
-  Widget _buildAmountField(_RecipientRow row) {
+  Widget _buildAmount(_RecipientRow row, PaymentRequest? request) {
     final colors = context.coconutColors;
+    final unit = GestureDetector(
+      onTap: _toggleUnit,
+      child: Padding(
+        padding: const EdgeInsets.only(right: 4),
+        child: Text(_unit.symbol, style: CoconutTypography.heading4_18_Bold.setColor(colors.primaryText)),
+      ),
+    );
     if (row.isMax) {
       return Padding(
-        padding: const EdgeInsets.symmetric(vertical: 12),
-        child: Text('Everything left', style: CoconutTypography.body1_16_Bold.setColor(colors.primaryText)),
+        padding: const EdgeInsets.symmetric(vertical: 10),
+        child: Text(
+          t.ark.send.everything_left,
+          style: CoconutTypography.heading4_18_NumberBold.setColor(colors.secondaryText),
+        ),
       );
     }
-    return TextField(
+    return CoconutTextField(
       controller: row.amount,
       focusNode: row.amountFocus,
+      style: CoconutTextFieldStyle.underline,
+      underlineSpacing: CoconutTextFieldUnderlineSpacing.standard,
+      backgroundColor: colors.surface,
+      fontSize: 18,
+      fontFamily: CoconutTypography.kNumberFontFamily,
+      letterSpacing: -0.04,
+      fontWeight: FontWeight.bold,
       readOnly: row.amountLocked,
-      keyboardType: TextInputType.numberWithOptions(decimal: !_unit.isBasedOnSatoshi),
-      inputFormatters: [FilteringTextInputFormatter.allow(RegExp(_unit.isBasedOnSatoshi ? r'[0-9]' : r'[0-9.,]'))],
-      style: CoconutTypography.body1_16_Bold.setColor(row.amountLocked ? colors.secondaryText : colors.primaryText),
-      decoration: InputDecoration(
-        border: InputBorder.none,
-        hintText: 'Amount',
-        hintStyle: CoconutTypography.body1_16.setColor(colors.tertiaryText),
-        suffixText: _unit.symbol,
-        suffixStyle: CoconutTypography.body2_14.setColor(colors.secondaryText),
+      onChanged: (_) {},
+      onEditingComplete: () => row.amountFocus.unfocus(),
+      textInputAction: TextInputAction.done,
+      textInputType: _unit.isBtcUnit ? const TextInputType.numberWithOptions(decimal: true) : TextInputType.number,
+      textInputFormatter: [_unit.isBtcUnit ? const BtcAmountInputFormatter() : const SatoshiAmountInputFormatter()],
+      placeholderText: t.ark.send.amount_placeholder,
+      descriptionText:
+          row.amountLocked
+              ? (request?.kind == PaymentRequestKind.lightningInvoice
+                  ? t.ark.send.set_by_invoice
+                  : t.ark.send.set_by_code)
+              : null,
+      maxLines: 1,
+      suffix: unit,
+    );
+  }
+
+  /// The dashed "Add Recipient" card from the send screen, here always in view.
+  Widget _buildAddRecipient() {
+    final colors = context.coconutColors;
+    return ShrinkAnimationButton(
+      onPressed: _addRecipient,
+      defaultColor: colors.background,
+      pressedOverlayColor: colors.surfacePressOverlay,
+      pressedOverlayOpacity: colors.surfacePressOverlayOpacity,
+      borderRadius: CoconutStyles.radius_400,
+      borderWidth: 0,
+      child: CustomPaint(
+        painter: DashedBorderPainter(dashSpace: 4.0, dashWidth: 4.0, color: colors.border),
+        child: SizedBox(
+          height: 56,
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              SvgPicture.asset(
+                CommonActionIconPath.plus,
+                colorFilter: ColorFilter.mode(colors.primaryText, BlendMode.srcIn),
+              ),
+              CoconutLayout.spacing_100w,
+              Text(t.send_screen.add_recipient, style: CoconutTypography.body2_14.setColor(colors.primaryText)),
+            ],
+          ),
+        ),
       ),
     );
   }
 
   Widget _buildAvailable(int arkAvailable) {
-    final colors = context.coconutColors;
-    return Container(
-      padding: const EdgeInsets.fromLTRB(16, 12, 12, 12),
-      decoration: BoxDecoration(color: colors.surface, borderRadius: BorderRadius.circular(CoconutStyles.radius_300)),
-      child: Row(
-        children: [
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                _available('Available on-chain', _onchainAvailableSats),
-                _available('Available in Ark', arkAvailable),
-              ],
-            ),
-          ),
-          _choice(_unit.symbol, selected: false, onTap: _toggleUnit),
-        ],
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTap: _toggleUnit,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 4),
+        child: Column(
+          children: [
+            ArkInfoRow(label: t.ark.send.available_onchain, value: formatSats(_unit, _onchainAvailableSats)),
+            ArkInfoRow(label: t.ark.send.available_ark, value: formatSats(_unit, arkAvailable)),
+          ],
+        ),
       ),
     );
   }
-
-  Widget _available(String label, int sats) {
-    final colors = context.coconutColors;
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 2),
-      child: Row(
-        children: [
-          Expanded(child: Text(label, style: CoconutTypography.body3_12.setColor(colors.secondaryText))),
-          Text(
-            _unit.displayBitcoinAmount(
-              sats,
-              withUnit: true,
-              shouldCheckZero: true,
-              defaultWhenZero: '0 ${_unit.symbol}',
-            ),
-            style: CoconutTypography.body3_12_Number.setColor(colors.primaryText),
-          ),
-          CoconutLayout.spacing_200w,
-        ],
-      ),
-    );
-  }
-
-  Widget _chip(String text) => Container(
-    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-    decoration: BoxDecoration(
-      color: context.coconutColors.surfaceMuted,
-      borderRadius: BorderRadius.circular(CoconutStyles.radius_100),
-    ),
-    child: Text(text, style: CoconutTypography.body3_12.setColor(context.coconutColors.primaryText)),
-  );
-
-  Widget _choice(String text, {required bool selected, required VoidCallback onTap}) => GestureDetector(
-    onTap: onTap,
-    child: Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-      decoration: BoxDecoration(
-        color: selected ? context.coconutColors.surfaceMuted : Colors.transparent,
-        border: Border.all(color: context.coconutColors.surfaceMuted),
-        borderRadius: BorderRadius.circular(CoconutStyles.radius_100),
-      ),
-      child: Text(text, style: CoconutTypography.body3_12.setColor(context.coconutColors.primaryText)),
-    ),
-  );
 }
