@@ -31,6 +31,7 @@ import 'package:coconut_wallet/providers/wallet_provider.dart';
 import 'package:coconut_wallet/screens/ark/ark_movement_detail_screen.dart';
 import 'package:coconut_wallet/screens/ark/ark_unlock_flow.dart';
 import 'package:coconut_wallet/screens/settings/app_settings/app_settings_screen.dart';
+import 'package:coconut_wallet/screens/wallet_detail/move_sheet.dart';
 import 'package:coconut_wallet/screens/wallet_detail/wallet_detail_faucet_request_bottom_sheet.dart';
 import 'package:coconut_wallet/services/analytics_service.dart';
 import 'package:coconut_wallet/ui/coconut/coconut_app_bar.dart';
@@ -749,10 +750,10 @@ class _WalletDetailScreenState extends State<WalletDetailScreen> with TickerProv
                               duration: const Duration(milliseconds: 200),
                               curve: Curves.easeOutCubic,
                               child: BottomActionButton(
-                                iconPath: FeatureWalletIconPath.vault,
-                                label: t.wallet_detail_screen.move_to_vault,
+                                iconPath: CommonNavigationIconPath.arrowTopDown,
+                                label: 'Move',
                                 labelMaxLines: null,
-                                onTap: _onMoveToVaultPressed,
+                                onTap: _onMovePressed,
                                 buttonLayout: BottomActionButtonLayout.horizontal,
                                 textStyle: CoconutTypography.body2_14_Bold,
                               ),
@@ -775,6 +776,86 @@ class _WalletDetailScreenState extends State<WalletDetailScreen> with TickerProv
       return Flexible(child: IntrinsicWidth(child: child));
     }
     return Expanded(child: child);
+  }
+
+  /// Move: between this hot wallet's on-chain balance, its Ark balance and the user's vaults.
+  /// Without Ark or vaults there is nothing to choose, so it explains vaults as before.
+  Future<void> _onMovePressed() async {
+    final walletProvider = context.read<WalletProvider>();
+    final arkProvider = context.read<ArkProvider>();
+    final options = MoveOptions(
+      hotWallet: _viewModel.wallet,
+      onchainBalanceSats: _viewModel.balance,
+      arkBalanceSats:
+          arkProvider.supportsArk(_viewModel.wallet) ? (arkProvider.balance(widget.id)?.spendable ?? 0) : null,
+      vaults: [
+        for (final vault in walletProvider.walletItemList.where((wallet) => !wallet.hasLocalKey))
+          (wallet: vault, balanceSats: walletProvider.getWalletBalance(vault.id).total),
+      ],
+    );
+    if (!options.hasChoices) {
+      await _onMoveToVaultPressed();
+      return;
+    }
+    final selection = await CommonBottomSheets.showBottomSheet<MoveSelection>(
+      context: context,
+      title: 'Move',
+      screenName: 'wallet_detail/move',
+      showCloseButton: true,
+      backgroundColor: context.coconutColors.surfaceBottomSheet,
+      child: Flexible(child: MoveSheet(options: options, currentUnit: _viewModel.currentUnit)),
+    );
+    if (!mounted || selection == null) return;
+    _openMove(selection);
+  }
+
+  void _openMove(MoveSelection selection) {
+    final to = selection.to;
+    final from = selection.from;
+    switch ((from.kind, to.kind)) {
+      case (MoveEndpointKind.onchain, MoveEndpointKind.vault):
+        _openSendToVault(to.walletId);
+      case (MoveEndpointKind.onchain, MoveEndpointKind.ark):
+        Navigator.pushNamed(
+          context,
+          AppRouteNames.send,
+          arguments: SendRouteArgs(
+            id: widget.id,
+            sendEntryPoint: SendEntryPoint.walletDetail,
+            boardIntoWalletId: widget.id,
+          ),
+        );
+      case (MoveEndpointKind.ark, _):
+        Navigator.pushNamed(
+          context,
+          AppRouteNames.arkToOnchain,
+          arguments: ArkToOnchainRouteArgs(id: widget.id, destinationWalletId: to.walletId),
+        );
+      case (MoveEndpointKind.vault, MoveEndpointKind.onchain):
+        // The vault's own send flow (signed with Coconut Vault), receiving into this wallet.
+        Navigator.pushNamed(
+          context,
+          AppRouteNames.send,
+          arguments: SendRouteArgs(
+            id: from.walletId,
+            sendEntryPoint: SendEntryPoint.walletDetail,
+            isMoveToVault: true,
+            receivingVaultWalletId: widget.id,
+          ),
+        );
+      case (MoveEndpointKind.vault, MoveEndpointKind.ark):
+        Navigator.pushNamed(
+          context,
+          AppRouteNames.send,
+          arguments: SendRouteArgs(
+            id: from.walletId,
+            sendEntryPoint: SendEntryPoint.walletDetail,
+            boardIntoWalletId: widget.id,
+          ),
+        );
+      default:
+        break;
+    }
   }
 
   Future<void> _onMoveToVaultPressed() async {

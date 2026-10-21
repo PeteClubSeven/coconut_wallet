@@ -178,6 +178,9 @@ class _SendScreenState extends State<SendScreen> with SingleTickerProviderStateM
   List<WalletAddress> _vaultReceivingAddresses = [];
   String _receivingVaultName = '';
 
+  /// Move mode can also receive into a hot wallet (a vault moving funds back on-chain).
+  bool _receivingIsVault = true;
+
   // Board mode: the recipient is the board funding address of [SendScreen.boardIntoWalletId].
   ArkBoardFunding? _boardFunding;
   String _boardWalletName = '';
@@ -243,6 +246,7 @@ class _SendScreenState extends State<SendScreen> with SingleTickerProviderStateM
       final walletProvider = context.read<WalletProvider>();
       final vault = walletProvider.getWalletById(widget.receivingVaultWalletId!);
       _receivingVaultName = vault.name;
+      _receivingIsVault = !vault.hasLocalKey;
       final firstAddress = walletProvider.getReceiveAddress(vault.id);
       _vaultReceivingAddresses = [firstAddress];
       _addressControllerList.first.text = firstAddress.address;
@@ -639,7 +643,10 @@ class _SendScreenState extends State<SendScreen> with SingleTickerProviderStateM
                                       ? 'Boards these funds into the Ark balance of $_boardWalletName. The Ark server '
                                           'takes a fee, and the funds become spendable in Ark once the funding '
                                           'transaction has enough confirmations.'
-                                      : t.send_screen.vault_transfer_description,
+                                      : _receivingIsVault
+                                      ? t.send_screen.vault_transfer_description
+                                      : 'Moves funds from this vault to $_receivingVaultName, '
+                                          'to one of its unused receive addresses.',
                               style: CoconutTypography.body3_12
                                   .setColor(context.coconutColors.popoverText)
                                   .copyWith(height: 1.3),
@@ -1838,7 +1845,11 @@ class _SendScreenState extends State<SendScreen> with SingleTickerProviderStateM
               mainAxisAlignment: MainAxisAlignment.end,
               children: [
                 Text(
-                  _isBoardMode ? 'Move to Ark · $_boardWalletName' : t.wallet_detail_screen.move_to_vault,
+                  _isBoardMode
+                      ? 'Move to Ark · $_boardWalletName'
+                      : _receivingIsVault
+                      ? t.wallet_detail_screen.move_to_vault
+                      : 'Move to $_receivingVaultName',
                   style: CoconutTypography.body3_12_Bold.setColor(context.coconutColors.secondaryText),
                 ),
                 const SizedBox(width: 2),
